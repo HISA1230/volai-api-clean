@@ -1,0 +1,58 @@
+# utils/notifier.py
+import os, json, smtplib, ssl, requests
+from email.mime.text import MIMEText
+
+def notify_slack(text: str):
+    url = os.getenv("SLACK_WEBHOOK_URL")
+    if not url: 
+        return {"ok": False, "reason": "no_webhook"}
+    try:
+        r = requests.post(url, json={"text": text}, timeout=10)
+        return {"ok": r.ok, "status": r.status_code, "text": r.text[:200]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def notify_email(subject: str, body: str):
+    host = os.getenv("SMTP_HOST"); port = int(os.getenv("SMTP_PORT","587"))
+    user = os.getenv("SMTP_USER"); pwd  = os.getenv("SMTP_PASS")
+    to   = os.getenv("SMTP_TO")
+    if not (host and user and pwd and to):
+        return {"ok": False, "reason": "smtp_incomplete"}
+    try:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = user; msg["To"] = to
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP(host, port, timeout=15) as s:
+            s.starttls(context=ctx)
+            s.login(user, pwd)
+            s.sendmail(user, [to], msg.as_string())
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def notify_line(text: str):
+    token = os.getenv("LINE_TOKEN")
+    if not token:
+        return {"ok": False, "reason": "no_line_token"}
+    try:
+        r = requests.post(
+            "https://notify-api.line.me/api/notify",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"message": text},
+            timeout=10
+        )
+        return {"ok": r.ok, "status": r.status_code, "text": r.text[:200]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def notify_all(title: str, payload: dict):
+    body = f"{title}\n```json\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n```"
+    res = {
+        "slack": notify_slack(body),
+        "email": notify_email(title, body),
+        "line":  notify_line(f"{title}\n{json.dumps(payload, ensure_ascii=False)}")
+    }
+    # まとめのokフラグ
+    res["ok_any"] = any(v.get("ok") for v in res.values())
+    return res

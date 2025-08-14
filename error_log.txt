@@ -1,0 +1,346 @@
+❌ register() で例外発生: (psycopg2.errors.UndefinedColumn) 列users.idは存在しません
+LINE 1: SELECT users.id AS users_id, users.email AS users_email, use...
+               ^
+
+[SQL: SELECT users.id AS users_id, users.email AS users_email, users.hashed_password AS users_hashed_password 
+FROM users 
+WHERE users.email = %(email_1)s 
+ LIMIT %(param_1)s]
+[parameters: {'email_1': 'tryuser@example.com', 'param_1': 1}]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+❌ register() で例外発生: Could not determine join condition between parent/child tables on relationship UserModel.predictions - there are no foreign keys linking these tables.  Ensure that referencing columns are associated with a ForeignKey or ForeignKeyConstraint, or specify a 'primaryjoin' expression.
+❌ login(): password mismatch for user → tryuser@example.com
+❌ login(): unexpected exception → 401: Invalid credentials
+❌ login(): user not found →  tryuser@example.com
+❌ login(): unexpected exception → 401: Invalid credentials
+予測エラー:
+(psycopg2.errors.InvalidSchemaName) スキーマ"np"は存在しません
+LINE 1: ...rediction, timestamp) VALUES (1, 50.5, 0.8, 15.2, np.float64...
+                                                             ^
+
+[SQL: INSERT INTO prediction_log (user_id, rci, atr, vix, prediction, timestamp) VALUES (%(user_id)s, %(rci)s, %(atr)s, %(vix)s, %(prediction)s, %(timestamp)s) RETURNING prediction_log.id]
+[parameters: {'user_id': 1, 'rci': 50.5, 'atr': 0.8, 'vix': 15.2, 'prediction': np.float64(0.5690598898031353), 'timestamp': datetime.datetime(2025, 8, 4, 0, 52, 28, 262018)}]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1961, in _exec_single_context
+    self.dialect.do_execute(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        cursor, str_statement, effective_parameters, context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 944, in do_execute
+    cursor.execute(statement, parameters)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+psycopg2.errors.InvalidSchemaName: スキーマ"np"は存在しません
+LINE 1: ...rediction, timestamp) VALUES (1, 50.5, 0.8, 15.2, np.float64...
+                                                             ^
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\predict_router.py", line 34, in predict_volatility
+    db.commit()
+    ~~~~~~~~~^^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 2032, in commit
+    trans.commit(_to_root=True)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 2, in commit
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 1313, in commit
+    self._prepare_impl()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "<string>", line 2, in _prepare_impl
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 1288, in _prepare_impl
+    self.session.flush()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 4345, in flush
+    self._flush(objects)
+    ~~~~~~~~~~~^^^^^^^^^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 4480, in _flush
+    with util.safe_reraise():
+         ~~~~~~~~~~~~~~~~~^^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\util\langhelpers.py", line 224, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 4441, in _flush
+    flush_context.execute()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py", line 466, in execute
+    rec.execute(self)
+    ~~~~~~~~~~~^^^^^^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.mapper,
+        ^^^^^^^^^^^^
+        uow.states_for_mapper_hierarchy(self.mapper, False, False),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        uow,
+        ^^^^
+    )
+    ^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\persistence.py", line 93, in save_obj
+    _emit_insert_statements(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        base_mapper,
+        ^^^^^^^^^^^^
+    ...<3 lines>...
+        insert,
+        ^^^^^^^
+    )
+    ^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\orm\persistence.py", line 1233, in _emit_insert_statements
+    result = connection.execute(
+        statement,
+        params,
+        execution_options=execution_options,
+    )
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1413, in execute
+    return meth(
+        self,
+        distilled_parameters,
+        execution_options or NO_OPTIONS,
+    )
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\sql\elements.py", line 526, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self, distilled_params, execution_options
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1635, in _execute_clauseelement
+    ret = self._execute_context(
+        dialect,
+    ...<8 lines>...
+        cache_hit=cache_hit,
+    )
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1840, in _execute_context
+    return self._exec_single_context(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        dialect, context, statement, parameters
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1980, in _exec_single_context
+    self._handle_dbapi_exception(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        e, str_statement, effective_parameters, cursor, context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 2349, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1961, in _exec_single_context
+    self.dialect.do_execute(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        cursor, str_statement, effective_parameters, context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 944, in do_execute
+    cursor.execute(statement, parameters)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+sqlalchemy.exc.ProgrammingError: (psycopg2.errors.InvalidSchemaName) スキーマ"np"は存在しません
+LINE 1: ...rediction, timestamp) VALUES (1, 50.5, 0.8, 15.2, np.float64...
+                                                             ^
+
+[SQL: INSERT INTO prediction_log (user_id, rci, atr, vix, prediction, timestamp) VALUES (%(user_id)s, %(rci)s, %(atr)s, %(vix)s, %(prediction)s, %(timestamp)s) RETURNING prediction_log.id]
+[parameters: {'user_id': 1, 'rci': 50.5, 'atr': 0.8, 'vix': 15.2, 'prediction': np.float64(0.5690598898031353), 'timestamp': datetime.datetime(2025, 8, 4, 0, 52, 28, 262018)}]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 21, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Retrain Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\venv\Lib\site-packages\pandas\core\indexes\base.py", line 3812, in get_loc
+    return self._engine.get_loc(casted_key)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "pandas/_libs/index.pyx", line 167, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/index.pyx", line 196, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7088, in pandas._libs.hashtable.PyObjectHashTable.get_item
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7096, in pandas._libs.hashtable.PyObjectHashTable.get_item
+KeyError: 'target_volatility'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\predict_router.py", line 96, in retrain_model
+    y = df["target_volatility"]
+        ~~^^^^^^^^^^^^^^^^^^^^^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\pandas\core\frame.py", line 4107, in __getitem__
+    indexer = self.columns.get_loc(key)
+  File "C:\project\volatility_ai\venv\Lib\site-packages\pandas\core\indexes\base.py", line 3819, in get_loc
+    raise KeyError(key) from err
+KeyError: 'target_volatility'
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[SHAP Recompute Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\predict_router.py", line 218, in shap_recompute
+    trainer.load_data_from_db()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\project\volatility_ai\automl\auto_trainer.py", line 22, in load_data_from_db
+    conn = psycopg2.connect(
+        host="localhost",
+    ...<3 lines>...
+        password="postgres1234"
+    )
+  File "C:\project\volatility_ai\venv\Lib\site-packages\psycopg2\__init__.py", line 135, in connect
+    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+psycopg2.OperationalError: connection to server at "localhost" (::1), port 5433 failed: Connection refused (0x0000274D/10061)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "localhost" (127.0.0.1), port 5433 failed: Connection refused (0x0000274D/10061)
+	Is the server running on that host and accepting TCP/IP connections?
+
+
+[SHAP Recompute Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\predict_router.py", line 219, in shap_recompute
+    df = getattr(trainer, "data", None) or getattr(trainer, "df", None)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\project\volatility_ai\venv\Lib\site-packages\pandas\core\generic.py", line 1577, in __nonzero__
+    raise ValueError(
+    ...<2 lines>...
+    )
+ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+
+[Register Error]
+Traceback (most recent call last):
+  File "C:\project\volatility_ai\routers\user_router.py", line 17, in register
+    raise HTTPException(status_code=400, detail="User already registered")
+fastapi.exceptions.HTTPException: 400: User already registered
+

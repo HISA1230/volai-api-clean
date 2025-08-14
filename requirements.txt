@@ -1,0 +1,22 @@
+# --- web/api ---
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27
+python-dotenv>=1.0
+pydantic>=2.0
+
+# --- data/DB ---
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
+
+# --- ml ---
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.4
+lightgbm>=4.0
+shap>=0.45
+joblib>=1.3
+yfinance>=0.2
+
+# --- ui ---
+streamlit>=1.33
+plotly>=5.20

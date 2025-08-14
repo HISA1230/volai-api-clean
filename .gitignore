@@ -1,0 +1,26 @@
+# Streamlit secrets（資格情報）
+.streamlit/secrets.toml
+
+# 環境ファイル
+.env
+.env.*
+
+# Pythonキャッシュ & 仮想環境
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+venv_sys/
+
+# ローカル成果物（任意）
+logs/
+models/*_shap_values.pkl
+models/*_shap_summary.csv
+
+# （任意）運用由来のファイルを避けたい場合
+models/vol_model_stage.pkl
+models/.default_model.txt
+
+# （任意）Windows系ノイズ
+*.log
+Thumbs.db
