@@ -31,8 +31,11 @@ def _get_db_url() -> Optional[str]:
 
 @app.on_event("startup")
 def on_startup():
-    # 起動時に users テーブルなどを自動作成
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        import logging
+        logging.exception("init_db failed: %s", e)
 
 @app.get("/health")
 def health():
