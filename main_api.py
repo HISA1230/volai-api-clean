@@ -1,35 +1,41 @@
-# --- MINIMAL APP with debug endpoints (v2030-min) ---
+# --- API core (with auth + debug) ---
 import os
 from typing import Optional
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine.url import make_url, URL
 
-app = FastAPI(title="volai-api (minimal with debug)")
+from database.database_user import init_db
+from routers.user_router import router as auth_router
+
+app = FastAPI(title="volai-api-02")
+
+# CORS（必要ならあとで許可元を絞る）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def _normalize_driver(url: str) -> str:
-    # postgres:// → postgresql+psycopg2:// に変換
     if url and url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql+psycopg2://", 1)
     return url
 
 def _get_db_url() -> Optional[str]:
     url = os.getenv("SQLALCHEMY_DATABASE_URL") or os.getenv("DATABASE_URL")
-    if not url:
-        return None
-    return _normalize_driver(url)
+    return _normalize_driver(url) if url else None
 
-_ENGINE = None
-def get_engine():
-    global _ENGINE
-    if _ENGINE is None:
-        url = _get_db_url()
-        _ENGINE = create_engine(url, pool_pre_ping=True, pool_recycle=300) if url else None
-    return _ENGINE
+@app.on_event("startup")
+def on_startup():
+    # 起動時に users テーブルなどを自動作成
+    init_db()
 
 @app.get("/health")
 def health():
-    # ← この文字列が見えたら「新しいコード」が動いています
     return {"ok": True, "signature": "v2030-min", "has_debug": True}
 
 @app.get("/debug/dbinfo")
@@ -52,12 +58,13 @@ def debug_dbinfo():
 
 @app.get("/debug/dbping")
 def debug_dbping():
-    eng = get_engine()
-    if not eng:
+    url = _get_db_url()
+    if not url:
         return {"error": "No DATABASE_URL set"}
-    try:
-        with eng.connect() as conn:
-            row = conn.execute(text("select current_database() as db, current_user as user")).mappings().first()
-            return {"db": row["db"], "user": row["user"]}
-    except Exception as e:
-        return {"error": f"db connection failed: {e}"}
+    eng = create_engine(url, pool_pre_ping=True, pool_recycle=300)
+    with eng.connect() as conn:
+        row = conn.execute(text("select current_database() as db, current_user as user")).mappings().first()
+        return {"db": row["db"], "user": row["user"]}
+
+# 認証ルーター（/register, /login, /me）を登録
+app.include_router(auth_router)
