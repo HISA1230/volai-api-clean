@@ -4,3 +4,4 @@ sqlalchemy
 psycopg2-binary
 python-jose[cryptography]
 passlib[bcrypt]
+email-validator>=2.2
