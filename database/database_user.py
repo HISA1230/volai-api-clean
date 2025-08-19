@@ -1,45 +1,46 @@
+# database/database_user.py
 import os
 from typing import Optional
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models.models_user import Base  # User/テーブル定義を読み込む
 
-_ENGINE = None
-_SessionLocal = None
+# 1) まず SQLALCHEMY_DATABASE_URL を見る。無ければ DATABASE_URL を使う
+def _pick_url() -> Optional[str]:
+    return os.getenv("SQLALCHEMY_DATABASE_URL") or os.getenv("DATABASE_URL")
 
-def _normalize_driver(url: str) -> str:
-    if url and url.startswith("postgres://"):
+# 2) postgres:// → postgresql+psycopg2:// に正規化
+def _normalize_driver(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return url
+    if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql+psycopg2://", 1)
     return url
 
-def _get_db_url() -> Optional[str]:
-    url = os.getenv("SQLALCHEMY_DATABASE_URL") or os.getenv("DATABASE_URL")
-    return _normalize_driver(url) if url else None
+# 3) `channel_binding` を外し、`sslmode=require` を保証
+def _sanitize_query(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return url
+    p = urlparse(url)
+    q = dict(parse_qsl(p.query, keep_blank_values=True))
+    q.pop("channel_binding", None)          # ← これで常に外す
+    if q.get("sslmode") is None:
+        q["sslmode"] = "require"
+    new_query = urlencode(q, doseq=True)
+    return urlunparse(p._replace(query=new_query))
 
-def get_engine():
-    global _ENGINE
-    if _ENGINE is None:
-        url = _get_db_url()
-        _ENGINE = create_engine(url, pool_pre_ping=True, pool_recycle=300) if url else None
-    return _ENGINE
+_DB_URL = _sanitize_query(_normalize_driver(_pick_url()))
+if not _DB_URL:
+    raise RuntimeError("No DATABASE_URL / SQLALCHEMY_DATABASE_URL set")
 
-def get_sessionmaker():
-    global _SessionLocal
-    if _SessionLocal is None:
-        eng = get_engine()
-        _SessionLocal = sessionmaker(bind=eng, autocommit=False, autoflush=False)
-    return _SessionLocal
+# main_api.py が import して使う engine / get_db を提供
+engine = create_engine(_DB_URL, pool_pre_ping=True, pool_recycle=300, future=True)
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 def get_db():
-    SessionLocal = get_sessionmaker()
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-
-def init_db():
-    eng = get_engine()
-    if eng is None:
-        return
-    Base.metadata.create_all(bind=eng)
