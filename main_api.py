@@ -1,4 +1,4 @@
-# --- API core (auth + debug + BearerAuth in OpenAPI) ---
+# --- API core (auth + models + debug + BearerAuth in OpenAPI) ---
 import os
 from typing import Optional
 
@@ -17,8 +17,14 @@ except Exception:
 # ルーター（認証）
 try:
     from routers.user_router import router as auth_router
-except Exception as e:
+except Exception:
     auth_router = None
+
+# ルーター（モデル管理）←★追加
+try:
+    from routers.models_router import router as models_router
+except Exception:
+    models_router = None
 
 app = FastAPI(
     title="volai-api-02",
@@ -123,6 +129,10 @@ def debug_dbsource():
 # --- 認証ルーターを登録 ---
 if auth_router:
     app.include_router(auth_router)
+
+# --- モデル管理ルーターを登録（/models…）←★追加 ---
+if models_router:
+    app.include_router(models_router)
 
 # --- OpenAPI に Bearer 認証を追加（Authorize ボタンを出す） ---
 EXCLUDE_SECURITY_PATHS = {
