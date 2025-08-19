@@ -18,13 +18,13 @@ def _normalize_driver(url: Optional[str]) -> Optional[str]:
         return url.replace("postgres://", "postgresql+psycopg2://", 1)
     return url
 
-# 3) `channel_binding` を外し、`sslmode=require` を保証
+# 3) channel_binding を外し、sslmode=require を保証
 def _sanitize_query(url: Optional[str]) -> Optional[str]:
     if not url:
         return url
     p = urlparse(url)
     q = dict(parse_qsl(p.query, keep_blank_values=True))
-    q.pop("channel_binding", None)          # ← これで常に外す
+    q.pop("channel_binding", None)          # ← 常に外す
     if q.get("sslmode") is None:
         q["sslmode"] = "require"
     new_query = urlencode(q, doseq=True)
@@ -34,7 +34,7 @@ _DB_URL = _sanitize_query(_normalize_driver(_pick_url()))
 if not _DB_URL:
     raise RuntimeError("No DATABASE_URL / SQLALCHEMY_DATABASE_URL set")
 
-# main_api.py が import して使う engine / get_db を提供
+# main_api.py から import される公開オブジェクト
 engine = create_engine(_DB_URL, pool_pre_ping=True, pool_recycle=300, future=True)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
