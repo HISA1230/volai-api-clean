@@ -8,7 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-# 既存のJWT認証を流用（/login の仕組み）
+# 既存の JWT 認証（/login で発行）の検証関数を再利用
 from routers.user_router import get_current_user
 
 router = APIRouter(prefix="/predict", tags=["Predict"])
@@ -57,7 +57,7 @@ def shap_recompute(body: ShapRecomputeBody, user=Depends(get_current_user)):
 @router.get("/logs")
 def prediction_logs(user=Depends(get_current_user)):
     """
-    UIが/predict/logsを呼ぶので、当面は空配列でOK。
+    UIが /predict/logs を呼ぶので、当面は空配列でOK。
     （本実装は後でDBのPredictionLogに置き換え）
     """
     return []
