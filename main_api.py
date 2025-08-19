@@ -1,4 +1,4 @@
-# --- API core (auth + models + debug + BearerAuth in OpenAPI) ---
+# --- API core (auth + models + predict + scheduler + debug + BearerAuth in OpenAPI) ---
 import os
 from typing import Optional
 
@@ -20,11 +20,23 @@ try:
 except Exception:
     auth_router = None
 
-# ルーター（モデル管理）←★追加
+# ルーター（モデル管理）
 try:
     from routers.models_router import router as models_router
 except Exception:
     models_router = None
+
+# ルーター（予測/SHAP）
+try:
+    from routers.predict_router import router as predict_router
+except Exception:
+    predict_router = None
+
+# ルーター（スケジューラ）
+try:
+    from routers.scheduler_router import router as scheduler_router
+except Exception:
+    scheduler_router = None
 
 app = FastAPI(
     title="volai-api-02",
@@ -126,13 +138,15 @@ def debug_dbsource():
         "engine_query_tail": tail,  # 例: "sslmode=require"
     }
 
-# --- 認証ルーターを登録 ---
+# --- ルーター登録 ---
 if auth_router:
     app.include_router(auth_router)
-
-# --- モデル管理ルーターを登録（/models…）←★追加 ---
 if models_router:
     app.include_router(models_router)
+if predict_router:
+    app.include_router(predict_router)
+if scheduler_router:
+    app.include_router(scheduler_router)
 
 # --- OpenAPI に Bearer 認証を追加（Authorize ボタンを出す） ---
 EXCLUDE_SECURITY_PATHS = {
