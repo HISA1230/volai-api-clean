@@ -4,27 +4,33 @@ import os
 import csv
 from datetime import datetime
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-# 認証（/login のトークン）
+# 既存のJWT認証を流用（/login の仕組み）
 from routers.user_router import get_current_user
 
 router = APIRouter(prefix="/predict", tags=["Predict"])
 
 class ShapRecomputeBody(BaseModel):
     model_path: str = Field(..., description="例: models/vol_model.pkl")
-    sample_size: Optional[int] = Field(256, ge=1, description="ダミーなので何でもOK")
+    sample_size: Optional[int] = Field(256, ge=1, description="ダミーなので値は任意")
     feature_cols: Optional[List[str]] = Field(default=["rci", "atr", "vix"])
 
 @router.post("/shap/recompute")
-def shap_recompute(body: ShapRecomputeBody, user = Depends(get_current_user)):
+def shap_recompute(body: ShapRecomputeBody, user=Depends(get_current_user)):
+    """
+    UI/配線確認用のダミー実装：
+    - 指定したモデルパスの横に *_shap_summary.csv を作って200を返す
+    - 本物のSHAP計算は後で差し替え
+    """
     if not os.path.exists(body.model_path):
         raise HTTPException(status_code=404, detail=f"model not found: {body.model_path}")
 
     base, _ = os.path.splitext(body.model_path)
-    shap_values_path = base + "_shap_values.pkl"   # ダミー
-    summary_csv_path = base + "_shap_summary.csv"  # UI が参照
+    shap_values_path = base + "_shap_values.pkl"   # ダミー（中身は作らない）
+    summary_csv_path = base + "_shap_summary.csv"  # UI が読むCSV（こちらは作る）
 
     os.makedirs(os.path.dirname(summary_csv_path), exist_ok=True)
     rows = [
@@ -47,3 +53,11 @@ def shap_recompute(body: ShapRecomputeBody, user = Depends(get_current_user)):
         "summary_csv_path": summary_csv_path,
         "at": datetime.utcnow().isoformat() + "Z",
     }
+
+@router.get("/logs")
+def prediction_logs(user=Depends(get_current_user)):
+    """
+    UIが/predict/logsを呼ぶので、当面は空配列でOK。
+    （本実装は後でDBのPredictionLogに置き換え）
+    """
+    return []
