@@ -1,3 +1,4 @@
+# main_api.py
 # --- API core (auth + models + predict + scheduler + debug + BearerAuth in OpenAPI) ---
 import os
 from typing import Optional
@@ -13,6 +14,12 @@ try:
     from database.database_user import engine as db_engine
 except Exception:
     db_engine = None
+
+# 起動時のテーブル初期化が用意されていれば呼ぶ
+try:
+    from database.database_user import init_db as _init_db
+except Exception:
+    _init_db = None
 
 # ルーター（認証）
 try:
@@ -52,6 +59,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- 起動時フック（任意） ---
+@app.on_event("startup")
+def _startup():
+    if _init_db:
+        try:
+            _init_db()
+        except Exception as e:
+            import logging
+            logging.exception("init_db failed: %s", e)
 
 # --- 環境変数から接続URL（表示用） ---
 def _normalize_driver(url: Optional[str]) -> Optional[str]:
@@ -123,19 +140,14 @@ def debug_dbping():
     except Exception as e:
         return {"error": f"db connection failed: {e}"}
 
-# --- （任意）デバッグ: どの変数があるか ---
-@app.get("/debug/dbsource")
-def debug_dbsource():
-    has_sqlalchemy = bool(os.getenv("SQLALCHEMY_DATABASE_URL"))
-    has_database = bool(os.getenv("DATABASE_URL"))
-    tail = ""
-    if db_engine is not None:
-        s = str(db_engine.url)
-        tail = s.split("?", 1)[-1] if "?" in s else ""
+# --- デバッグ: 読み込まれたルーターの可視化 ---
+@app.get("/debug/routers")
+def debug_routers():
     return {
-        "has_SQLALCHEMY_DATABASE_URL": has_sqlalchemy,
-        "has_DATABASE_URL": has_database,
-        "engine_query_tail": tail,  # 例: "sslmode=require"
+        "auth_loaded": bool(auth_router),
+        "models_loaded": bool(models_router),
+        "predict_loaded": bool(predict_router),
+        "scheduler_loaded": bool(scheduler_router),
     }
 
 # --- ルーター登録 ---
@@ -155,9 +167,24 @@ EXCLUDE_SECURITY_PATHS = {
     "/debug/dbinfo",
     "/debug/dbping",
     "/debug/dbsource",
+    "/debug/routers",
     "/login",
     "/register",
 }
+
+@app.get("/debug/dbsource")
+def debug_dbsource():
+    has_sqlalchemy = bool(os.getenv("SQLALCHEMY_DATABASE_URL"))
+    has_database = bool(os.getenv("DATABASE_URL"))
+    tail = ""
+    if db_engine is not None:
+        s = str(db_engine.url)
+        tail = s.split("?", 1)[-1] if "?" in s else ""
+    return {
+        "has_SQLALCHEMY_DATABASE_URL": has_sqlalchemy,
+        "has_DATABASE_URL": has_database,
+        "engine_query_tail": tail,  # 例: "sslmode=require"
+    }
 
 def custom_openapi():
     if app.openapi_schema:
