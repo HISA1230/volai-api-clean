@@ -6,13 +6,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends
 
-# --- 認証依存を柔軟化 ---
+# --- 認証依存を柔軟化（auth が無くても読み込めるように） ---
 AUTH_MODE = "jwt"
 try:
-    from auth.auth_jwt import get_current_user as _get_current_user  # 推奨ルート
+    from auth.auth_jwt import get_current_user as _get_current_user  # 本来はこちら
 except Exception:
-    # 開発向けフォールバック（誰でも通る擬似ユーザ）※本番では必ずauth実装を入れてください
-    AUTH_MODE = "open-fallback"
+    AUTH_MODE = "open-fallback"  # ← 一時的に誰でも通す開発用
     from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
     _bearer = HTTPBearer(auto_error=False)
 
@@ -37,10 +36,7 @@ class SchedulerRunIn(BaseModel):
     note: Optional[str] = Field(None, description="メモ")
 
 @router.post("/run")
-def run_scheduler(
-    body: SchedulerRunIn,
-    current_user = Depends(_get_current_user),
-):
+def run_scheduler(body: SchedulerRunIn, current_user = Depends(_get_current_user)):
     checked_models = [
         {"model_path": "models/vol_model.pkl",    "mae": 0.0075, "meets_threshold": True},
         {"model_path": "models/vol_model_v2.pkl", "mae": 0.0091, "meets_threshold": False},
