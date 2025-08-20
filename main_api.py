@@ -1,4 +1,3 @@
-# main_api.py
 # --- API core (auth + models + predict + scheduler + debug + BearerAuth in OpenAPI) ---
 import os
 from typing import Optional
@@ -9,49 +8,44 @@ from fastapi.openapi.utils import get_openapi
 from sqlalchemy import text
 from sqlalchemy.engine.url import make_url, URL
 
-# DB: engine は database_user.py 側で生成されたものを使う
+# ===== DBエンジン（database_user.py 側で初期化済みのものを使う） =====
 try:
     from database.database_user import engine as db_engine
 except Exception:
     db_engine = None
 
-# 起動時のテーブル初期化が用意されていれば呼ぶ
-try:
-    from database.database_user import init_db as _init_db
-except Exception:
-    _init_db = None
-
-# ルーター（認証）
+# ===== ルーター読込み（失敗してもサービスは起動するよう try/except） =====
 try:
     from routers.user_router import router as auth_router
 except Exception:
     auth_router = None
 
-# ルーター（モデル管理）
 try:
     from routers.models_router import router as models_router
 except Exception:
     models_router = None
 
-# ルーター（予測/SHAP）
+# Predict は読み込み状況もデバッグで見たいので、エラー文言を保持
 try:
     from routers.predict_router import router as predict_router
-except Exception:
+    _predict_import_error = None
+except Exception as e:
     predict_router = None
+    _predict_import_error = f"{e.__class__.__name__}: {e}"
 
-# ルーター（スケジューラ）
 try:
     from routers.scheduler_router import router as scheduler_router
 except Exception:
     scheduler_router = None
 
+# ===== FastAPI アプリ =====
 app = FastAPI(
     title="volai-api-02",
     version="2030",
     description="High-Accuracy Volatility Prediction API (FastAPI + PostgreSQL + AutoML)",
 )
 
-# CORS（必要に応じて絞ってください）
+# ===== CORS（必要に応じて絞ってください） =====
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 例: ["http://localhost:8502", "http://127.0.0.1:8502"]
@@ -60,17 +54,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 起動時フック（任意） ---
-@app.on_event("startup")
-def _startup():
-    if _init_db:
-        try:
-            _init_db()
-        except Exception as e:
-            import logging
-            logging.exception("init_db failed: %s", e)
-
-# --- 環境変数から接続URL（表示用） ---
+# ===== 接続URLの表示用ヘルパ =====
 def _normalize_driver(url: Optional[str]) -> Optional[str]:
     if not url:
         return url
@@ -82,12 +66,12 @@ def _get_db_url_from_env() -> Optional[str]:
     url = os.getenv("SQLALCHEMY_DATABASE_URL") or os.getenv("DATABASE_URL")
     return _normalize_driver(url) if url else None
 
-# --- ヘルスチェック ---
+# ===== ヘルスチェック =====
 @app.get("/health")
 def health():
     return {"ok": True, "signature": "v2030-min", "has_debug": True}
 
-# --- デバッグ: 接続URLの可視化 ---
+# ===== デバッグ: 接続URLの可視化 =====
 @app.get("/debug/dbinfo")
 def debug_dbinfo():
     env_url = _get_db_url_from_env()
@@ -124,7 +108,7 @@ def debug_dbinfo():
 
     return {"env_url": safe_env, "engine_url": engine_url}
 
-# --- デバッグ: DBへ ping ---
+# ===== デバッグ: DBへ ping =====
 @app.get("/debug/dbping")
 def debug_dbping():
     if db_engine is None:
@@ -140,38 +124,7 @@ def debug_dbping():
     except Exception as e:
         return {"error": f"db connection failed: {e}"}
 
-# --- デバッグ: 読み込まれたルーターの可視化 ---
-@app.get("/debug/routers")
-def debug_routers():
-    return {
-        "auth_loaded": bool(auth_router),
-        "models_loaded": bool(models_router),
-        "predict_loaded": bool(predict_router),
-        "scheduler_loaded": bool(scheduler_router),
-    }
-
-# --- ルーター登録 ---
-if auth_router:
-    app.include_router(auth_router)
-if models_router:
-    app.include_router(models_router)
-if predict_router:
-    app.include_router(predict_router)
-if scheduler_router:
-    app.include_router(scheduler_router)
-
-# --- OpenAPI に Bearer 認証を追加（Authorize ボタンを出す） ---
-EXCLUDE_SECURITY_PATHS = {
-    "/",
-    "/health",
-    "/debug/dbinfo",
-    "/debug/dbping",
-    "/debug/dbsource",
-    "/debug/routers",
-    "/login",
-    "/register",
-}
-
+# ===== デバッグ: どの環境変数が効いているか =====
 @app.get("/debug/dbsource")
 def debug_dbsource():
     has_sqlalchemy = bool(os.getenv("SQLALCHEMY_DATABASE_URL"))
@@ -186,10 +139,44 @@ def debug_dbsource():
         "engine_query_tail": tail,  # 例: "sslmode=require"
     }
 
+# ===== デバッグ: ルーター読込み状況 =====
+@app.get("/debug/routers")
+def debug_routers():
+    return {
+        "auth_loaded": auth_router is not None,
+        "models_loaded": models_router is not None,
+        "predict_loaded": predict_router is not None,
+        "scheduler_loaded": scheduler_router is not None,
+        "predict_error": _predict_import_error,
+    }
+
+# ===== ルーター登録 =====
+if auth_router:
+    app.include_router(auth_router)
+if models_router:
+    app.include_router(models_router)
+if predict_router:
+    app.include_router(predict_router)
+if scheduler_router:
+    app.include_router(scheduler_router)
+
+# ===== OpenAPI に Bearer 認証を追加（Authorize ボタン用） =====
+EXCLUDE_SECURITY_PATHS = {
+    "/",
+    "/health",
+    "/debug/dbinfo",
+    "/debug/dbping",
+    "/debug/dbsource",
+    "/debug/routers",
+    "/login",
+    "/register",
+}
+
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
 
+    # 基本のスキーマを生成
     openapi_schema = get_openapi(
         title=app.title,
         version=app.version,
@@ -197,16 +184,26 @@ def custom_openapi():
         routes=app.routes,
     )
 
+    # Bearer を定義
     comps = openapi_schema.setdefault("components", {}).setdefault("securitySchemes", {})
     comps["BearerAuth"] = {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
 
-    # すべてのパスに Bearer を要求（ただし EXCLUDE_SECURITY_PATHS は除外）
-    for path, ops in openapi_schema.get("paths", {}).items():
-        for _, operation in ops.items():
-            if path in EXCLUDE_SECURITY_PATHS:
-                operation.pop("security", None)
-            else:
-                operation["security"] = [{"BearerAuth": []}]
+    # ★ここが重要：HTTPメソッドだけに security を付与（parameters 等は除外）
+    HTTP_METHODS = {"get", "post", "put", "delete", "patch", "options", "head", "trace"}
+
+    try:
+        for path, path_item in openapi_schema.get("paths", {}).items():
+            for method, operation in list(path_item.items()):
+                if method.lower() in HTTP_METHODS and isinstance(operation, dict):
+                    if path in EXCLUDE_SECURITY_PATHS:
+                        operation.pop("security", None)
+                    else:
+                        operation["security"] = [{"BearerAuth": []}]
+                # それ以外（parameters などの list）は触らない
+    except Exception as e:
+        # 何かあっても /docs が落ちないようフォールバック
+        import logging
+        logging.exception("custom_openapi security patch failed: %s", e)
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
