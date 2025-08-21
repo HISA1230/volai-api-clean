@@ -121,3 +121,32 @@ def debug_routers():
         "predict_error": _PREDICT_ERR,
         "scheduler_error": _SCHED_ERR,
     }
+    
+    # === Debug: DBテーブル存在チェック & 作成（本番一時用） ===
+from fastapi.responses import JSONResponse
+from sqlalchemy import inspect
+from models.models_user import Base  # 既にimport済みなら重複不要
+
+@app.get("/debug/dbcheck")
+def debug_dbcheck():
+    try:
+        insp = inspect(engine)
+        return {
+            "ok": True,
+            "tables": {
+                "users": insp.has_table("users"),
+                "prediction_logs": insp.has_table("prediction_logs"),
+                "model_meta": insp.has_table("model_meta"),
+                "model_eval": insp.has_table("model_eval"),
+            }
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+@app.post("/debug/dbcreate")
+def debug_dbcreate():
+    try:
+        Base.metadata.create_all(bind=engine)
+        return {"ok": True, "created": True}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
