@@ -31,6 +31,9 @@ class UserModel(Base):
         passive_deletes=True,
     )
 
+# 互換: 旧auth_routerが "User" を参照しても動くように（※クラスの“外”に置く）
+User = UserModel
+
 # =========================
 # 予測ログ
 # =========================
