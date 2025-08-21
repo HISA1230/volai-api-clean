@@ -1,7 +1,10 @@
 fastapi
 uvicorn[standard]
-sqlalchemy
+sqlalchemy>=2.0
 psycopg2-binary
 python-jose[cryptography]
 passlib[bcrypt]
+bcrypt<4.2
 email-validator>=2.2
+pydantic>=2
+pandas
