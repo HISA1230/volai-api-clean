@@ -6,6 +6,8 @@ from typing import List
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import inspect
 
 # DBまわり（/health での軽い疎通に備えて import だけ）
 try:
@@ -27,7 +29,7 @@ app = FastAPI(
 )
 
 # -----------------------------
-# ログ設定（Renderなら標準出力に流れる）
+# ログ設定（Renderなら標準出力へ）
 # -----------------------------
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -92,7 +94,7 @@ except Exception as e:
     logger.exception("scheduler router load failed: %s", e)
 
 # -----------------------------
-# ヘルス & 情報
+# ルート & ヘルス
 # -----------------------------
 @app.get("/")
 def root():
@@ -108,7 +110,9 @@ def health():
     # シンプル版（DBに触れない）
     return {"ok": True}
 
+# -----------------------------
 # デバッグ：どのルーターが載っているか
+# -----------------------------
 @app.get("/debug/routers")
 def debug_routers():
     return {
@@ -121,14 +125,16 @@ def debug_routers():
         "predict_error": _PREDICT_ERR,
         "scheduler_error": _SCHED_ERR,
     }
-    
-    # === Debug: DBテーブル存在チェック & 作成（本番一時用） ===
-from fastapi.responses import JSONResponse
-from sqlalchemy import inspect
-from models.models_user import Base  # 既にimport済みなら重複不要
+
+# ==============================
+# 一時デバッグAPI：DBテーブル確認/作成
+# ==============================
+from models.models_user import Base  # 既にimport済みなら重複不要だが安全のため
 
 @app.get("/debug/dbcheck")
 def debug_dbcheck():
+    if engine is None:
+        return JSONResponse(status_code=500, content={"ok": False, "error": "engine is None (DB not configured)"})
     try:
         insp = inspect(engine)
         return {
@@ -145,6 +151,8 @@ def debug_dbcheck():
 
 @app.post("/debug/dbcreate")
 def debug_dbcreate():
+    if engine is None:
+        return JSONResponse(status_code=500, content={"ok": False, "error": "engine is None (DB not configured)"})
     try:
         Base.metadata.create_all(bind=engine)
         return {"ok": True, "created": True}
