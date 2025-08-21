@@ -158,3 +158,13 @@ def debug_dbcreate():
         return {"ok": True, "created": True}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+    
+    from fastapi.responses import JSONResponse
+
+@app.get("/debug/dbinfo")
+def debug_dbinfo():
+    try:
+        from database.database_user import engine
+        return {"ok": True, "url": engine.url.render_as_string(hide_password=True)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
