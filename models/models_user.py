@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column, Integer, String, Float, ForeignKey, DateTime, Index,
-    UniqueConstraint, Boolean, JSON, func
+    UniqueConstraint, Boolean, JSON, func, Text
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -18,12 +18,13 @@ class UserModel(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
-    hashed_password = Column(String(255), nullable=False)
-    created_at = Column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
+
+    # ★ここが重要：routers/user_router.py が参照するのは password_hash
+    # かつ bcrypt ハッシュは 60文字以上になるので Text にしておく
+    password_hash = Column(Text, nullable=False)
+
+    # どちらでも動きますがサーバ側で付与できる server_default を採用
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     predictions = relationship(
         "PredictionLog",
@@ -135,11 +136,9 @@ class ModelEval(Base):
 # =========================
 from pydantic import BaseModel as PydBaseModel
 
-
 class UserCreate(PydBaseModel):
     email: str
     password: str
-
 
 class UserLogin(PydBaseModel):
     email: str

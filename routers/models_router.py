@@ -1,285 +1,285 @@
 # routers/models_router.py
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-import os
-import glob
+# -*- coding: utf-8 -*-
+"""
+依存ゼロの Models ルーター（ファイルベース）
+- /models            : モデル一覧 + 既定モデルの取得（GET）
+- /models/default    : 既定モデルの取得（GET）、設定（POST）
+- /models/rename     : モデルファイルのリネーム（POST）
+- /models            : モデルの削除（DELETE）
+- /models/meta       : メタ情報の取得（GET）、保存（POST） … .meta.json に保存
+
+認証は“あれば使う”方式（routers.user_router.get_current_user があれば Depends）。
+無ければフリーパスで動作します。
+"""
+
+from __future__ import annotations
+from fastapi import APIRouter, HTTPException, Body, Query, Depends
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 import json
-from datetime import datetime
+import time
 
-from auth.auth_jwt import get_current_user
-from database.database_user import get_db
-from sqlalchemy.orm import Session
-from models.models_user import UserModel, ModelMeta
+# ---------------------------
+# 認証（存在すれば使う / 無ければ無視）
+# ---------------------------
+def _noop_dep():
+    return None
 
-router = APIRouter(prefix="/models", tags=["Models"])
+_auth_dep = _noop_dep
+try:
+    # あれば使う（例：routers.user_router に get_current_user がある場合）
+    from routers.user_router import get_current_user as _real_auth
+    _auth_dep = _real_auth  # type: ignore
+except Exception:
+    pass
 
-MODELS_DIR = "models"
-DEFAULT_FILE = os.path.join(MODELS_DIR, ".default_model.txt")
+router = APIRouter(prefix="/models", tags=["models"])
 
-# ---------- Input Schemas ----------
-class SetDefaultBody(BaseModel):
-    model_path: str = Field(..., description="モデルのパス（例: models/vol_model.pkl）", alias="model_path")
+MODELS_DIR = Path("models")
+MODELS_DIR.mkdir(exist_ok=True)
+DEFAULT_FILE = MODELS_DIR / ".default_model.txt"
 
-class RenameBody(BaseModel):
-    old_name: str
-    new_name: str
+def _norm(p: Path | str) -> str:
+    return str(Path(p).as_posix())
 
-class DeleteBody(BaseModel):
-    model_path: str
+def _meta_path(model_path: str | Path) -> Path:
+    base = Path(model_path).with_suffix("")       # models/foo.pkl -> models/foo
+    return base.with_suffix(".meta.json")         # -> models/foo.meta.json
 
-class ModelMetaIn(BaseModel):
-    model_path: str
-    display_name: Optional[str] = None
-    version: Optional[str] = None
-    owner: Optional[str] = None
-    description: Optional[str] = None
-    tags: Optional[List[str]] = None
-    pinned: Optional[bool] = False
+def _list_pkls() -> List[Path]:
+    return sorted(MODELS_DIR.glob("*.pkl"))
 
-# ---------- Helpers ----------
-def _default_model_path() -> str:
-    if os.path.exists(DEFAULT_FILE):
-        try:
-            with open(DEFAULT_FILE, "r", encoding="utf-8") as f:
-                return f.read().strip()
-        except Exception:
-            return ""
-    return ""
-
-def _write_default(path: str):
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    with open(DEFAULT_FILE, "w", encoding="utf-8") as f:
-        f.write(path)
-
-def _file_info(p: str) -> Dict[str, Any]:
+def _file_info(p: Path) -> Dict[str, Any]:
     try:
-        stat = os.stat(p)
+        st = p.stat()
         return {
-            "name": os.path.basename(p),
-            "path": p.replace("\\", "/"),
-            "size_bytes": stat.st_size,
-            "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            "name": p.name,
+            "path": _norm(p),
+            "size_bytes": st.st_size,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(st.st_mtime)),
         }
     except FileNotFoundError:
-        return {
-            "name": os.path.basename(p),
-            "path": p.replace("\\", "/"),
-            "size_bytes": None,
-            "updated_at": None
-        }
+        return {"name": p.name, "path": _norm(p), "size_bytes": None, "updated_at": None}
 
-def _load_meta_bulk(db: Session, model_paths: List[str]) -> Dict[str, Dict[str, Any]]:
-    """model_path -> meta dict"""
-    rows = db.query(ModelMeta).filter(ModelMeta.model_path.in_(model_paths)).all()
-    out = {}
-    for r in rows:
-        out[r.model_path] = {
-            "display_name": r.display_name,
-            "version": r.version,
-            "owner": r.owner,
-            "description": r.description,
-            "tags": r.tags or [],
-            "pinned": r.pinned,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-        }
-    return out
+def _load_meta(model_path: Path) -> Dict[str, Any]:
+    mp = _meta_path(model_path)
+    if mp.exists():
+        try:
+            return json.loads(mp.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
 
-# ---------- Endpoints ----------
+def _save_meta(model_path: Path, meta: Dict[str, Any]) -> None:
+    mp = _meta_path(model_path)
+    mp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def _get_default() -> str:
+    if DEFAULT_FILE.exists():
+        return DEFAULT_FILE.read_text(encoding="utf-8").strip()
+    return ""
+
+def _set_default(path: str) -> None:
+    DEFAULT_FILE.write_text(path.strip(), encoding="utf-8")
+
+# ---------------------------
+# 一覧
+# ---------------------------
 @router.get("")
 def list_models(
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    q: Optional[str] = Query(None, description="フリーテキスト検索（名前/説明/タグに対して）"),
-    tag: Optional[str] = Query(None, description="タグでフィルタ（完全一致）"),
+    q: Optional[str] = Query(None, description="フリーテキスト（name/description/tags に対して）"),
+    tag: Optional[str] = Query(None, description="完全一致のタグフィルタ"),
+    current_user: Any = Depends(_auth_dep),
 ):
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    pkls = sorted(glob.glob(os.path.join(MODELS_DIR, "*.pkl")))
-    default_path = _default_model_path()
+    pkls = _list_pkls()
+    items: List[Dict[str, Any]] = []
+    for p in pkls:
+        info = _file_info(p)
+        meta = _load_meta(p)
+        info["description"] = meta.get("description", "")
+        info["display_name"] = meta.get("display_name")
+        info["version"] = meta.get("version")
+        info["owner"] = meta.get("owner")
+        info["tags"] = meta.get("tags", [])
+        info["pinned"] = bool(meta.get("pinned", False))
+        items.append(info)
 
-    # 基本ファイル情報
-    infos = [_file_info(p) for p in pkls]
-    model_paths = [i["path"] for i in infos]
+    # フィルタ
+    if q:
+        ql = q.lower()
+        items = [
+            r for r in items
+            if (ql in (r["name"] or "").lower())
+            or (ql in (r.get("description") or "").lower())
+            or (ql in " ".join(r.get("tags", [])).lower())
+            or (ql in (r.get("display_name") or "").lower())
+        ]
+    if tag:
+        items = [r for r in items if tag in (r.get("tags") or [])]
 
-    # メタをDBからまとめて取得
-    meta_map = _load_meta_bulk(db, model_paths)
+    # pinned を上位
+    items.sort(key=lambda r: (not r.get("pinned", False), r.get("name") or ""))
 
-    # メタをマージ
-    enriched = []
-    for info in infos:
-        meta = meta_map.get(info["path"], {})
-        row = {
-            **info,
-            "display_name": meta.get("display_name"),
-            "version": meta.get("version"),
-            "owner": meta.get("owner"),
-            "description": meta.get("description"),
-            "tags": meta.get("tags", []),
-            "pinned": meta.get("pinned", False),
-        }
-        enriched.append(row)
+    return {"default_model": _get_default(), "models": items}
 
-    # フィルタリング
-    def match_q(r):
-        if not q:
-            return True
-        text = " ".join([
-            r.get("name") or "",
-            r.get("display_name") or "",
-            r.get("description") or "",
-            " ".join(r.get("tags") or []),
-        ]).lower()
-        return q.lower() in text
-
-    def match_tag(r):
-        if not tag:
-            return True
-        return tag in (r.get("tags") or [])
-
-    filtered = [r for r in enriched if match_q(r) and match_tag(r)]
-
-    # pinned を上位に
-    filtered.sort(key=lambda r: (not r.get("pinned", False), r.get("name") or ""))
-
-    return {
-        "default_model": default_path,
-        "models": filtered
-    }
-
+# ---------------------------
+# 既定モデルの取得
+# ---------------------------
 @router.get("/default")
-def get_default_model(current_user: UserModel = Depends(get_current_user)):
-    return {"default_model": _default_model_path()}
+def get_default_model(current_user: Any = Depends(_auth_dep)):
+    return {"default_model": _get_default()}
 
+# ---------------------------
+# 既定モデルの設定
+# ---------------------------
 @router.post("/default")
 def set_default_model(
-    body: SetDefaultBody,
-    current_user: UserModel = Depends(get_current_user),
+    body: Dict[str, str] = Body(...),
+    current_user: Any = Depends(_auth_dep),
 ):
-    model_path = body.model_path
-    if not os.path.exists(model_path):
-        raise HTTPException(status_code=404, detail="Model file not found")
-    _write_default(model_path)
-    return {"message": "default model set", "default_model": model_path}
+    model_path = (body.get("model_path") or "").strip()
+    if not model_path:
+        raise HTTPException(400, "model_path is required")
 
+    p = Path(model_path)
+    if not p.exists():
+        # models/ の補正
+        p2 = MODELS_DIR / p.name
+        if not p2.exists():
+            raise HTTPException(404, f"Model not found: {model_path}")
+        p = p2
+
+    _set_default(_norm(p))
+    return {"message": "default model set", "default_model": _norm(p)}
+
+# ---------------------------
+# リネーム
+# ---------------------------
 @router.post("/rename")
 def rename_model(
-    body: RenameBody,
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    body: Dict[str, str] = Body(...),
+    current_user: Any = Depends(_auth_dep),
 ):
-    old_path = os.path.join(MODELS_DIR, body.old_name)
-    new_path = os.path.join(MODELS_DIR, body.new_name)
+    old_name = (body.get("old_name") or "").strip()
+    new_name = (body.get("new_name") or "").strip()
+    if not old_name or not new_name:
+        raise HTTPException(400, "old_name and new_name are required")
 
-    if not os.path.exists(old_path):
-        raise HTTPException(status_code=404, detail="Old model not found")
-    if os.path.exists(new_path):
-        raise HTTPException(status_code=400, detail="New name already exists")
+    src = MODELS_DIR / old_name
+    dst = MODELS_DIR / new_name
+    if not src.exists():
+        raise HTTPException(404, f"not found: {src}")
+    if dst.exists():
+        raise HTTPException(409, f"already exists: {dst}")
 
     # 本体
-    os.rename(old_path, new_path)
+    src.rename(dst)
 
-    # 付随SHAPファイルもリネーム（あれば）
-    base_old = os.path.splitext(old_path)[0]
-    base_new = os.path.splitext(new_path)[0]
-    for suffix in ["_shap_values.pkl", "_shap_summary.csv"]:
-        op = base_old + suffix
-        np = base_new + suffix
-        if os.path.exists(op):
-            try:
-                os.rename(op, np)
-            except Exception:
-                pass
+    # 付随 SHAP サマリも改名（存在すれば）
+    shap_old = MODELS_DIR / (old_name.replace(".pkl", "_shap_summary.csv"))
+    shap_new = MODELS_DIR / (new_name.replace(".pkl", "_shap_summary.csv"))
+    if shap_old.exists():
+        try:
+            shap_old.rename(shap_new)
+        except Exception:
+            pass
 
-    # 既定が旧名なら更新
-    if _default_model_path() == old_path.replace("\\", "/"):
-        _write_default(new_path.replace("\\", "/"))
+    # 既定が旧名なら差し替え
+    if _get_default().endswith(old_name):
+        _set_default(_norm(dst))
 
-    # メタも path を更新
-    meta = db.query(ModelMeta).filter(ModelMeta.model_path == old_path.replace("\\", "/")).first()
-    if meta:
-        meta.model_path = new_path.replace("\\", "/")
-        db.commit()
+    # メタファイル移設
+    meta_old = _meta_path(src)
+    meta_new = _meta_path(dst)
+    if meta_old.exists():
+        try:
+            meta_old.rename(meta_new)
+        except Exception:
+            pass
 
-    return {"message": "renamed", "new_name": body.new_name}
+    return {"ok": True, "new_name": new_name}
 
+# ---------------------------
+# 削除
+# ---------------------------
 @router.delete("")
 def delete_model(
-    body: DeleteBody,
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    body: Dict[str, str] = Body(...),
+    current_user: Any = Depends(_auth_dep),
 ):
-    p = body.model_path
-    if not os.path.exists(p):
-        raise HTTPException(status_code=404, detail="Model not found")
+    model_path = (body.get("model_path") or "").strip()
+    if not model_path:
+        raise HTTPException(400, "model_path is required")
 
-    if _default_model_path() == p.replace("\\", "/"):
-        raise HTTPException(status_code=400, detail="Default model cannot be deleted")
+    p = Path(model_path)
+    if not p.exists():
+        p = MODELS_DIR / Path(model_path).name
+    if not p.exists():
+        raise HTTPException(404, f"not found: {model_path}")
 
-    os.remove(p)
+    if _get_default() == _norm(p):
+        raise HTTPException(400, "default model cannot be deleted")
 
-    # 付随SHAPも削除
-    base = os.path.splitext(p)[0]
-    for suffix in ["_shap_values.pkl", "_shap_summary.csv"]:
-        sp = base + suffix
-        if os.path.exists(sp):
-            try:
-                os.remove(sp)
-            except Exception:
-                pass
+    # 付随 SHAP を削除
+    try:
+        shap_csv = p.with_suffix("").with_name(p.stem + "_shap_summary.csv")
+        if shap_csv.exists():
+            shap_csv.unlink()
+    except Exception:
+        pass
 
-    # メタも削除
-    meta = db.query(ModelMeta).filter(ModelMeta.model_path == p.replace("\\", "/")).first()
-    if meta:
-        db.delete(meta)
-        db.commit()
+    # 本体削除
+    p.unlink(missing_ok=True)
 
-    return {"message": "deleted", "path": p}
+    # メタ削除
+    try:
+        mp = _meta_path(p)
+        if mp.exists():
+            mp.unlink()
+    except Exception:
+        pass
 
-# ===== メタ情報(DB) =====
+    return {"ok": True, "path": _norm(p)}
+
+# ---------------------------
+# メタ情報
+# ---------------------------
 @router.get("/meta")
 def get_model_meta(
-    model_path: str = Query(..., description="モデルパス（例: models/vol_model.pkl）"),
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    model_path: str = Query(..., description="例: models/vol_model.pkl"),
+    current_user: Any = Depends(_auth_dep),
 ):
-    meta = db.query(ModelMeta).filter(ModelMeta.model_path == model_path).first()
-    if not meta:
-        return {"meta": {}}
-    return {
-        "meta": {
-            "display_name": meta.display_name,
-            "version": meta.version,
-            "owner": meta.owner,
-            "description": meta.description,
-            "tags": meta.tags or [],
-            "pinned": meta.pinned,
-            "created_at": meta.created_at.isoformat() if meta.created_at else None,
-            "updated_at": meta.updated_at.isoformat() if meta.updated_at else None,
-        }
-    }
+    p = Path(model_path)
+    if not p.exists():
+        p2 = MODELS_DIR / p.name
+        if not p2.exists():
+            return {"meta": {}}
+        p = p2
+    return {"meta": _load_meta(p)}
 
 @router.post("/meta")
-def upsert_model_meta(
-    body: ModelMetaIn,
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db),
+def set_model_meta(
+    body: Dict[str, Any] = Body(...),
+    current_user: Any = Depends(_auth_dep),
 ):
-    if not os.path.exists(body.model_path):
-        raise HTTPException(status_code=404, detail="Model file not found")
+    model_path = (body.get("model_path") or "").strip()
+    if not model_path:
+        raise HTTPException(400, "model_path is required")
 
-    row = db.query(ModelMeta).filter(ModelMeta.model_path == body.model_path).first()
-    if not row:
-        row = ModelMeta(model_path=body.model_path)
+    p = Path(model_path)
+    if not p.exists():
+        p2 = MODELS_DIR / p.name
+        if not p2.exists():
+            raise HTTPException(404, f"model not found: {model_path}")
+        p = p2
 
-    row.display_name = body.display_name
-    row.version = body.version
-    row.owner = body.owner
-    row.description = body.description
-    row.tags = body.tags or []
-    row.pinned = bool(body.pinned)
-
-    db.add(row)
-    db.commit()
-    return {"message": "meta saved"}
+    meta = {
+        "display_name": body.get("display_name"),
+        "version": body.get("version"),
+        "owner": body.get("owner"),
+        "description": body.get("description"),
+        "tags": body.get("tags") or [],
+        "pinned": bool(body.get("pinned", False)),
+    }
+    _save_meta(p, meta)
+    return {"ok": True, "meta": meta}

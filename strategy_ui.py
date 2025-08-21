@@ -1,4 +1,5 @@
-# strategy_ui.py（SHAP可視化＋再計算＋モデルアーカイブ＋メタ編集＋サイドバー認証 完全版）
+# strategy_ui.py（SHAP可視化＋再計算＋モデルアーカイブ＋メタ編集＋スケジューラ：API_BASE自動解決版）
+# -*- coding: utf-8 -*-
 import os
 import joblib
 import requests
@@ -7,47 +8,131 @@ import altair as alt
 import shap
 import matplotlib.pyplot as plt
 import streamlit as st
-import requests, streamlit as st, pandas as pd, os
+
+# =========================
+# 共通ユーティリティ
+# =========================
+def resolve_api_base() -> str:
+    """
+    API Base を 1) ?api=… 2) secrets 3) session_state 4) 環境変数 5) 既定 の優先順で決定
+    """
+    # 1) Query parameter
+    try:
+        qp = st.query_params
+        api_qp = qp.get("api", None)
+        if api_qp:
+            return api_qp if isinstance(api_qp, str) else api_qp[0]
+    except Exception:
+        # 旧API
+        try:
+            qp = st.experimental_get_query_params()
+            api_qp = qp.get("api", None)
+            if api_qp:
+                return api_qp[0] if isinstance(api_qp, list) else str(api_qp)
+        except Exception:
+            pass
+
+    # 2) secrets.toml
+    try:
+        if "API_BASE" in st.secrets and st.secrets["API_BASE"]:
+            return st.secrets["API_BASE"]
+    except Exception:
+        pass
+
+    # 3) session_state（他ページや親UIから引き継ぎ）
+    if st.session_state.get("API_BASE"):
+        return st.session_state["API_BASE"]
+
+    # 4) 環境変数
+    api_env = os.environ.get("API_BASE")
+    if api_env:
+        return api_env
+
+    # 5) 既定（本番APIに倒す）
+    return "https://volai-api-02.onrender.com"
+
+
+def get_token() -> str | None:
+    """token or access_token を許容（どちらでも使えるように）"""
+    return st.session_state.get("token") or st.session_state.get("access_token")
+
+
+def auth_headers() -> dict:
+    tok = get_token()
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
+def api_get(base: str, path: str, **kw):
+    return requests.get(f"{base}{path}", **kw)
+
+
+def api_post(base: str, path: str, **kw):
+    return requests.post(f"{base}{path}", **kw)
+
+
+def api_delete(base: str, path: str, **kw):
+    return requests.delete(f"{base}{path}", **kw)
+
 
 # =========================
 # 基本設定
 # =========================
 st.set_page_config(layout="wide")
 st.title("📈 高精度ボラ予測AIアプリ Ver.2030")
-API_BASE_URL = "http://127.0.0.1:8888"
+
+API_BASE = resolve_api_base()
+st.session_state["API_BASE"] = API_BASE  # 他ページでも参照できるよう共有
+
+st.info(f"API Base: `{API_BASE}` ｜ Swagger: {API_BASE}/docs")
 
 # =========================
 # 🔐 サイドバー：簡易ログイン
 # =========================
 st.sidebar.subheader("🔐 ログイン")
-email = st.sidebar.text_input("Email", value="test@example.com")
-password = st.sidebar.text_input("Password", type="password", value="test1234")
+# secrets があれば初期値に利用（任意）
+try:
+    _def_email = st.secrets.get("UI_EMAIL", "test@example.com")
+    _def_pw = st.secrets.get("UI_PASSWORD", "test1234")
+except Exception:
+    _def_email, _def_pw = "test@example.com", "test1234"
 
-if st.sidebar.button("Sign in"):
-    try:
-        res = requests.post(f"{API_BASE_URL}/login", json={"email": email, "password": password})
-        if res.status_code == 200:
-            token = res.json().get("access_token")
-            if token:
-                st.session_state["access_token"] = token
-                st.sidebar.success("ログイン成功！")
+email = st.sidebar.text_input("Email", value=st.session_state.get("login_email", _def_email))
+password = st.sidebar.text_input("Password", type="password", value=_def_pw)
+
+col_login1, col_login2 = st.sidebar.columns(2)
+with col_login1:
+    if st.button("Sign in", use_container_width=True):
+        try:
+            res = api_post(API_BASE, "/login", json={"email": email, "password": password}, timeout=20)
+            if res.status_code == 200:
+                token = res.json().get("access_token")
+                if token:
+                    st.session_state["token"] = token
+                    st.session_state["access_token"] = token
+                    st.session_state["login_email"] = email
+                    st.sidebar.success("ログイン成功！")
+                else:
+                    st.sidebar.error("トークンが取得できませんでした")
+            elif res.status_code in (401, 403):
+                st.sidebar.error("認証エラー：メール/パスワードをご確認ください。")
             else:
-                st.sidebar.error("トークンが取得できませんでした")
-        else:
-            st.sidebar.error(f"ログイン失敗: {res.status_code} - {res.text}")
-    except Exception as e:
-        st.sidebar.error(f"通信エラー: {e}")
+                st.sidebar.error(f"ログイン失敗: {res.status_code} - {res.text}")
+        except Exception as e:
+            st.sidebar.error(f"通信エラー: {e}")
 
-with st.sidebar.expander("🔑 手動でトークンを設定（Swaggerで取得したものを貼り付け可）"):
+with col_login2:
+    if st.button("ログアウト", use_container_width=True):
+        for k in ("token", "access_token", "login_email"):
+            st.session_state.pop(k, None)
+        st.sidebar.info("ログアウトしました。")
+
+with st.sidebar.expander("🔑 トークンを手動設定（Swaggerで取得したものを貼り付け可）"):
     manual_token = st.text_input("Bearer Token", type="password", placeholder="eyJhbGciOi...")
-    if st.button("Use this token"):
+    if st.button("Use this token", use_container_width=True):
         if manual_token:
+            st.session_state["token"] = manual_token
             st.session_state["access_token"] = manual_token
             st.sidebar.success("トークン設定しました")
-
-def get_headers():
-    token = st.session_state.get("access_token", "")
-    return {"Authorization": f"Bearer {token}"} if token else {}
 
 # =========================
 # 🔍 モデル選択（APIから取得・既定モデルを初期選択）
@@ -56,21 +141,20 @@ st.subheader("🔍 モデル選択（SHAP解析）")
 
 def fetch_models():
     try:
-        r = requests.get(f"{API_BASE_URL}/models", headers=get_headers(), timeout=15)
+        r = api_get(API_BASE, "/models", headers=auth_headers(), timeout=15)
         if r.status_code == 200:
             return r.json()
         elif r.status_code == 401:
             st.warning("認証が必要です。左の『ログイン』からサインインしてください。")
         else:
-            st.error(f"取得エラー: {r.status_code} - {r.text}")
+            st.error(f"モデル取得エラー: {r.status_code} - {r.text}")
     except Exception as e:
         st.error(f"通信エラー: {e}")
     return {"default_model": "", "models": []}
 
 def fetch_default_model():
-    # 念のため冗長に既定モデル単独取得
     try:
-        r = requests.get(f"{API_BASE_URL}/models/default", headers=get_headers(), timeout=10)
+        r = api_get(API_BASE, "/models/default", headers=auth_headers(), timeout=10)
         if r.status_code == 200:
             return r.json().get("default_model")
     except Exception:
@@ -82,8 +166,8 @@ models_list = models_payload.get("models", [])
 api_default_model = models_payload.get("default_model") or fetch_default_model()
 
 if models_list:
-    option_labels = [m["name"] for m in models_list]  # 表示名（ファイル名）
-    option_values = [m["path"] for m in models_list]  # 実体パス
+    option_labels = [m.get("name") or os.path.basename(m.get("path", "")) for m in models_list]
+    option_values = [m["path"] for m in models_list]
 else:
     option_labels = ["Standard Model", "Top SHAP Features Model"]
     option_values = ["models/vol_model.pkl", "models/vol_model_top_features.pkl"]
@@ -111,7 +195,7 @@ def guess_shap_values_paths(model_path: str):
         "shap_values.pkl",          # 互換：単一ファイル
     ]
 
-if st.button("🌀 SHAP特徴量重要度を表示"):
+if st.button("🌀 SHAP特徴量重要度を表示", use_container_width=True):
     shap_values = None
     chosen_path = None
     for p in guess_shap_values_paths(selected_model_path):
@@ -156,26 +240,22 @@ with c1:
 with c2:
     st.write(f"サンプル上限: `{recompute_sample}` 件")
 
-if st.button("📊 SHAPを再計算して保存"):
+if st.button("📊 SHAPを再計算して保存", use_container_width=True):
     try:
         payload = {
             "model_path": selected_model_path,
             "sample_size": int(recompute_sample),
-            "feature_cols": ["rci", "atr", "vix"],
+            "feature_cols": ["rci", "atr", "vix"],  # 必要に応じて差し替え
         }
-        res = requests.post(
-            f"{API_BASE_URL}/predict/shap/recompute",
-            json=payload,
-            headers=get_headers(),
-            timeout=30,
-        )
-
+        res = api_post(API_BASE, "/predict/shap/recompute",
+                       json=payload, headers=auth_headers(), timeout=60)
         if res.status_code == 200:
             data = res.json()
-            st.success(f"✅ {data['message']}")
-            st.write(f"- shap_values: `{data['shap_values_path']}`")
-            st.write(f"- summary_csv: `{data['summary_csv_path']}`")
-            st.write(f"- 上位特徴量: {data.get('top_features')}")
+            st.success(f"✅ {data.get('message','完了')}")
+            st.write(f"- shap_values: `{data.get('shap_values_path','')}`")
+            st.write(f"- summary_csv: `{data.get('summary_csv_path','')}`")
+            if data.get("top_features"):
+                st.write(f"- 上位特徴量: {data['top_features']}")
         elif res.status_code == 401:
             st.error("❌ 認証が必要です。左の『ログイン』からサインインしてから再実行してください。")
         else:
@@ -244,7 +324,6 @@ st.divider()
 # =========================
 st.header("📦 モデルアーカイブ")
 
-# 🔎 検索/フィルタ UI
 with st.expander("🔎 検索・フィルタ"):
     q = st.text_input("フリーテキスト検索（名前/説明/タグに対して）", value="")
     selected_tag = st.text_input("タグで絞り込み（完全一致・例: prod）", value="")
@@ -257,7 +336,7 @@ def fetch_models_safe(query: str = "", tag: str = ""):
         if tag:
             params["tag"] = tag
 
-        r = requests.get(f"{API_BASE_URL}/models", params=params, headers=get_headers(), timeout=15)
+        r = api_get(API_BASE, "/models", params=params, headers=auth_headers(), timeout=15)
         if r.status_code == 200:
             return r.json()
         elif r.status_code == 401:
@@ -272,10 +351,9 @@ colA, colB = st.columns([2, 1])
 with colA:
     st.subheader("📃 モデル一覧")
 with colB:
-    if st.button("🔄 再読み込み"):
+    if st.button("🔄 再読み込み", use_container_width=True):
         st.rerun()
 
-# ← 検索条件を渡して取得
 models_payload = fetch_models_safe(q, selected_tag)
 default_model = models_payload.get("default_model", "")
 models_list = models_payload.get("models", [])
@@ -285,7 +363,6 @@ if not models_list:
 else:
     df = pd.DataFrame(models_list)
 
-    # 追加列（存在すれば表示）
     if "mae" in df.columns:
         df["MAE"] = df["mae"].apply(lambda x: f"{x:.4f}" if pd.notnull(x) else "—")
     if "size_bytes" in df.columns:
@@ -317,11 +394,11 @@ else:
 
     # 既定に設定
     with c1:
-        if st.button("⭐ 既定に設定"):
+        if st.button("⭐ 既定に設定", use_container_width=True):
             try:
-                r = requests.post(f"{API_BASE_URL}/models/default",
-                                  json={"model_path": selected_path},
-                                  headers=get_headers(), timeout=15)
+                r = api_post(API_BASE, "/models/default",
+                             json={"model_path": selected_path},
+                             headers=auth_headers(), timeout=15)
                 if r.status_code == 200:
                     st.success("既定モデルを更新しました。")
                     st.rerun()
@@ -335,12 +412,12 @@ else:
     # リネーム
     with c2:
         new_name = st.text_input("新しいファイル名（.pkl）", value=selected_name.replace(".pkl", "_v2.pkl"))
-        if st.button("✏️ リネーム"):
+        if st.button("✏️ リネーム", use_container_width=True):
             if new_name.strip():
                 try:
-                    r = requests.post(f"{API_BASE_URL}/models/rename",
-                                      json={"old_name": selected_name, "new_name": new_name},
-                                      headers=get_headers(), timeout=15)
+                    r = api_post(API_BASE, "/models/rename",
+                                 json={"old_name": selected_name, "new_name": new_name},
+                                 headers=auth_headers(), timeout=15)
                     if r.status_code == 200:
                         st.success("リネームしました。付随する SHAP ファイルも可能な範囲で改名しています。")
                         st.rerun()
@@ -359,11 +436,11 @@ else:
         with colx:
             confirm = st.checkbox("削除の確認", value=False)
         with coly:
-            if st.button("🗑️ 削除") and confirm:
+            if st.button("🗑️ 削除", use_container_width=True) and confirm:
                 try:
-                    r = requests.delete(f"{API_BASE_URL}/models",
-                                        json={"model_path": selected_path},
-                                        headers=get_headers(), timeout=15)
+                    r = api_delete(API_BASE, "/models",
+                                   json={"model_path": selected_path},
+                                   headers=auth_headers(), timeout=15)
                     if r.status_code == 200:
                         st.success("モデルを削除しました。")
                         st.rerun()
@@ -379,13 +456,13 @@ else:
 st.divider()
 
 # =========================
-# 📝 A-29: モデルのメタ情報 編集UI
+# 📝 モデルのメタ情報 編集UI
 # =========================
 st.header("📝 モデルのメタ情報 編集")
 
 def _fetch_models_for_meta():
     try:
-        r = requests.get(f"{API_BASE_URL}/models", headers=get_headers(), timeout=15)
+        r = api_get(API_BASE, "/models", headers=auth_headers(), timeout=15)
         if r.status_code == 200:
             return r.json()
         elif r.status_code == 401:
@@ -407,14 +484,13 @@ else:
 
     # 現在のメタ取得
     try:
-        r = requests.get(f"{API_BASE_URL}/models/meta",
-                         params={"model_path": sel_path_meta},
-                         headers=get_headers(), timeout=15)
+        r = api_get(API_BASE, "/models/meta",
+                    params={"model_path": sel_path_meta},
+                    headers=auth_headers(), timeout=15)
         meta = r.json().get("meta", {}) if r.status_code == 200 else {}
     except Exception:
         meta = {}
 
-    # 既存メタをフォーム初期値に
     colL, colR = st.columns([2, 3])
     with colL:
         display_name = st.text_input("表示名（display_name）", value=meta.get("display_name", ""))
@@ -428,7 +504,7 @@ else:
     csave, cpreview = st.columns([1, 1])
 
     with csave:
-        if st.button("💾 メタ情報を保存"):
+        if st.button("💾 メタ情報を保存", use_container_width=True):
             try:
                 body = {
                     "model_path": sel_path_meta,
@@ -439,8 +515,8 @@ else:
                     "tags": [t.strip() for t in tags_str.split(",") if t.strip()],
                     "pinned": pinned,
                 }
-                r = requests.post(f"{API_BASE_URL}/models/meta",
-                                  json=body, headers=get_headers(), timeout=15)
+                r = api_post(API_BASE, "/models/meta",
+                             json=body, headers=auth_headers(), timeout=15)
                 if r.status_code == 200:
                     st.success("✅ 保存しました。")
                     st.rerun()
@@ -452,7 +528,7 @@ else:
                 st.error(f"通信エラー: {e}")
 
     with cpreview:
-        if st.button("👀 現在のメタをプレビュー"):
+        if st.button("👀 現在のメタをプレビュー", use_container_width=True):
             st.write({
                 "display_name": display_name,
                 "version": version,
@@ -465,29 +541,6 @@ else:
     with st.expander("現在保存されているメタ情報（読み取り）"):
         st.json(meta)
 
-# ⭐ 既定モデルのカード強調（メタ表示）
-default_model_for_card = models_payload.get("default_model") or fetch_default_model()
-if default_model_for_card:
-    try:
-        r = requests.get(f"{API_BASE_URL}/models/meta",
-                         params={"model_path": default_model_for_card},
-                         headers=get_headers(), timeout=10)
-        meta = r.json().get("meta", {}) if r.status_code == 200 else {}
-    except Exception:
-        meta = {}
-
-    st.divider()
-    st.subheader("⭐ 既定モデル")
-    st.markdown(f"**Path:** `{default_model_for_card}`")
-    if meta:
-        st.markdown(f"- **表示名**: {meta.get('display_name') or '—'}")
-        st.markdown(f"- **バージョン**: {meta.get('version') or '—'}")
-        st.markdown(f"- **オーナー**: {meta.get('owner') or '—'}")
-        st.markdown(f"- **タグ**: {', '.join(meta.get('tags', [])) or '—'}")
-        st.markdown(f"- **説明**: {meta.get('description') or '—'}")
-    else:
-        st.info("メタ情報が未登録です。上の『モデルのメタ情報 編集』から登録できます。")
-        
 # =========================
 # 🔬 モデル比較モード（MAE & SHAPサイドバイサイド）
 # =========================
@@ -496,7 +549,7 @@ st.header("🔬 モデル比較モード")
 
 def _fetch_models_list():
     try:
-        r = requests.get(f"{API_BASE_URL}/models", headers=get_headers(), timeout=15)
+        r = api_get(API_BASE, "/models", headers=auth_headers(), timeout=15)
         if r.status_code == 200:
             payload = r.json()
             return payload.get("models", []), payload.get("default_model", "")
@@ -504,21 +557,20 @@ def _fetch_models_list():
         pass
     return [], ""
 
-models_list, default_model_path = _fetch_models_list()
-if not models_list:
-    st.info("モデル一覧を取得できませんでした（未ログイン or モデルがありません）。左のログイン後、モデルを作成/再学習してください。")
+models_list2, default_model_path = _fetch_models_list()
+if not models_list2:
+    st.info("モデル一覧を取得できませんでした（未ログイン or モデル未登録）。左のログイン後、モデルを作成/再学習してください。")
 else:
-    names = [m["name"] for m in models_list]
-    paths = [m["path"] for m in models_list]
+    names = [m["name"] for m in models_list2]
+    paths = [m["path"] for m in models_list2]
     name_to_path = {n: p for n, p in zip(names, paths)}
 
     colA, colB = st.columns(2)
     with colA:
-        selA = st.selectbox("Model A", names, index=0 if names else 0)
+        selA = st.selectbox("Model A", names, index=0 if names else 0, key="cmpA")
     with colB:
-        # 既定モデルをデフォルトにすると便利
         idx_default = names.index(os.path.basename(default_model_path)) if default_model_path and os.path.basename(default_model_path) in names else (1 if len(names) > 1 else 0)
-        selB = st.selectbox("Model B", names, index=idx_default)
+        selB = st.selectbox("Model B", names, index=idx_default, key="cmpB")
 
     pathA = name_to_path.get(selA)
     pathB = name_to_path.get(selB)
@@ -526,28 +578,31 @@ else:
     # --- MAE比較（prediction_logsから）
     st.subheader("📈 精度比較（MAE）")
     try:
-        r = requests.get(f"{API_BASE_URL}/predict/logs", headers=get_headers(), timeout=15)
+        r = api_get(API_BASE, "/predict/logs", headers=auth_headers(), timeout=20)
         if r.status_code == 200:
             logs = r.json()
             if not logs:
                 st.warning("予測ログがありません。/predict を実行してから比較してください。")
             else:
                 df_logs = pd.DataFrame(logs)
-                # abs_error が入っている行のみ
-                df_mae = df_logs[df_logs["abs_error"].notnull()]
-                # ない場合もあるので防御
-                if df_mae.empty:
+                df_logs = df_logs[df_logs.get("abs_error").notnull()] if "abs_error" in df_logs.columns else pd.DataFrame()
+                if df_logs.empty:
                     st.info("誤差（abs_error）がまだありません。/predict/actual で正解ラベルを登録してください。")
                 else:
-                    g = df_mae.groupby("model_path").agg(
+                    g = df_logs.groupby("model_path").agg(
                         MAE=("abs_error", "mean"),
                         N=("abs_error", "count")
                     ).reset_index()
 
-                    maeA = g[g["model_path"] == pathA]["MAE"].values[0] if (pathA in set(g["model_path"])) else None
-                    maeB = g[g["model_path"] == pathB]["MAE"].values[0] if (pathB in set(g["model_path"])) else None
-                    nA   = g[g["model_path"] == pathA]["N"].values[0]   if (pathA in set(g["model_path"])) else 0
-                    nB   = g[g["model_path"] == pathB]["N"].values[0]   if (pathB in set(g["model_path"])) else 0
+                    def _pick(gdf, p):
+                        try:
+                            r_ = gdf[gdf["model_path"] == p]
+                            return (float(r_["MAE"].values[0]), int(r_["N"].values[0]))
+                        except Exception:
+                            return (None, 0)
+
+                    maeA, nA = _pick(g, pathA)
+                    maeB, nB = _pick(g, pathB)
 
                     c1, c2 = st.columns(2)
                     with c1:
@@ -555,10 +610,10 @@ else:
                     with c2:
                         st.metric(f"{selB}（N={nB}）", f"{maeB:.4f}" if maeB is not None else "—")
 
-                    # 並べて表でも確認
-                    show = []
-                    show.append({"model": selA, "path": pathA, "MAE": f"{maeA:.4f}" if maeA is not None else "—", "N": nA})
-                    show.append({"model": selB, "path": pathB, "MAE": f"{maeB:.4f}" if maeB is not None else "—", "N": nB})
+                    show = [
+                        {"model": selA, "path": pathA, "MAE": f"{maeA:.4f}" if maeA is not None else "—", "N": nA},
+                        {"model": selB, "path": pathB, "MAE": f"{maeB:.4f}" if maeB is not None else "—", "N": nB},
+                    ]
                     st.dataframe(pd.DataFrame(show), use_container_width=True, hide_index=True)
         elif r.status_code == 401:
             st.error("認証が必要です。左の『ログイン』からサインインしてください。")
@@ -571,6 +626,8 @@ else:
     st.subheader("🧠 SHAP 重要度比較（サイドバイサイド）")
 
     def _summary_for(path: str) -> pd.DataFrame | None:
+        if not path:
+            return None
         base = os.path.splitext(path)[0]
         candidates = [f"{base}_shap_summary.csv", "models/shap_summary.csv"]
         for cp in candidates:
@@ -596,7 +653,6 @@ else:
         dfA_show = dfA.sort_values("mean_abs_shap", ascending=False).head(topK)
         dfB_show = dfB.sort_values("mean_abs_shap", ascending=False).head(topK)
 
-        # Altairで左右に並べる
         chartA = (
             alt.Chart(dfA_show)
             .mark_bar()
@@ -626,66 +682,72 @@ else:
             right = dfB_show.rename(columns={"mean_abs_shap": f"{selB}_|SHAP|"})
             merged = pd.merge(left, right, on="feature", how="outer")
             st.dataframe(merged.fillna("—"), use_container_width=True)
-            
-    BASE_URL = "http://127.0.0.1:8888"
-
-def auth_headers():
-    tok = st.session_state.get("access_token")  # 既存のログイン処理で保存済み想定
-    return {"Authorization": f"Bearer {tok}"} if tok else {}
 
 st.divider()
+
+# =========================
+# 📆 スケジューラ & SHAP（API連携）
+# =========================
 st.subheader("📆 スケジューラ & SHAP")
 
-# 既定モデル表示
-col1, col2 = st.columns([1,1])
+col1, col2 = st.columns([1, 1])
 with col1:
-    if st.button("🔄 既定モデルを取得"):
-        r = requests.get(f"{BASE_URL}/models/default", headers=auth_headers())
+    if st.button("🔄 既定モデルを取得", use_container_width=True):
+        r = api_get(API_BASE, "/models/default", headers=auth_headers(), timeout=10)
         if r.ok:
-            st.success(r.json().get("default_model", "not set"))
-            st.session_state["default_model"] = r.json()["default_model"]
+            default_p = r.json().get("default_model", "")
+            st.session_state["default_model"] = default_p
+            st.success(default_p or "not set")
+        elif r.status_code == 401:
+            st.error("認証が必要です。左の『ログイン』からサインインしてください。")
         else:
             st.error(r.text)
 
 with col2:
-    # SHAP再計算
     mp = st.session_state.get("default_model")
     st.caption(f"SHAP再計算対象: {mp or '(未取得)'}")
-    if st.button("♻️ SHAP再計算"):
+    if st.button("♻️ SHAP再計算", use_container_width=True):
         if not mp:
             st.warning("先に既定モデルを取得してください。")
         else:
-            r = requests.post(f"{BASE_URL}/predict/shap/recompute",
-                              headers={**auth_headers(), "Content-Type":"application/json"},
-                              json={"model_path": mp})
+            r = api_post(
+                API_BASE, "/predict/shap/recompute",
+                headers={**auth_headers(), "Content-Type": "application/json"},
+                json={"model_path": mp}, timeout=60
+            )
             st.write(r.json() if r.ok else r.text)
 
-# スケジューラ実行フォーム
 with st.form("scheduler_run"):
     st.write("🧪 条件付き評価・再学習・昇格（A-30 実行）")
     mae = st.number_input("MAEしきい値", value=0.008, step=0.001, format="%.3f")
     mnl = st.number_input("最小ラベル数（昇格の下限）", min_value=0, value=10, step=1)
     topk = st.number_input("Top-K", min_value=1, value=3, step=1)
-    ap  = st.checkbox("自動昇格を有効化", value=True)
-    note= st.text_input("メモ", value="manual run")
+    ap = st.checkbox("自動昇格を有効化", value=True)
+    note = st.text_input("メモ", value="manual run")
     run = st.form_submit_button("▶ 実行")
     if run:
-        r = requests.post(f"{BASE_URL}/scheduler/run",
-                          headers={**auth_headers(), "Content-Type":"application/json"},
-                          json={"mae_threshold": float(mae),
-                                "min_new_labels": int(mnl),
-                                "top_k": int(topk),
-                                "auto_promote": bool(ap),
-                                "note": note})
+        r = api_post(
+            API_BASE, "/scheduler/run",
+            headers={**auth_headers(), "Content-Type": "application/json"},
+            json={
+                "mae_threshold": float(mae),
+                "min_new_labels": int(mnl),
+                "top_k": int(topk),
+                "auto_promote": bool(ap),
+                "note": note
+            },
+            timeout=60
+        )
         st.write(r.json() if r.ok else r.text)
 
-# 履歴
-if st.button("📜 履歴を更新"):
-    r = requests.get(f"{BASE_URL}/scheduler/status", headers=auth_headers())
+if st.button("📜 履歴を更新", use_container_width=True):
+    r = api_get(API_BASE, "/scheduler/status", headers=auth_headers(), timeout=15)
     if r.ok:
         val = r.json().get("value", [])
         df = pd.DataFrame(val)
-        st.dataframe(df if not df.empty else pd.DataFrame([{"message":"no history"}]))
+        st.dataframe(df if not df.empty else pd.DataFrame([{"message": "no history"}]), use_container_width=True)
+    elif r.status_code == 401:
+        st.error("認証が必要です。左の『ログイン』からサインインしてください。")
     else:
         st.error(r.text)
 
@@ -696,4 +758,5 @@ if mp:
     if os.path.exists(csv_guess):
         st.caption(f"SHAP summary: {csv_guess}")
         df = pd.read_csv(csv_guess)
-        st.bar_chart(df.set_index("feature")["mean_abs_shap"])
+        if {"feature", "mean_abs_shap"}.issubset(df.columns) and not df.empty:
+            st.bar_chart(df.set_index("feature")["mean_abs_shap"])
