@@ -170,3 +170,58 @@ def debug_dbinfo():
         return {"ok": True, "url": engine.url.render_as_string(hide_password=True)}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+    
+    # === Debug: runtime self test (bcrypt / jwt / db) ===
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+import os, traceback
+from datetime import datetime, timedelta
+
+@app.get("/debug/selftest")
+def debug_selftest():
+    out = {"ok": True}
+
+    # SECRET_KEY の存在チェック
+    sk = os.getenv("SECRET_KEY")
+    out["secret_key_present"] = bool(sk)
+    out["secret_key_len"] = len(sk or "")
+
+    # bcrypt / passlib のバージョン & 動作テスト
+    try:
+        import bcrypt as _bcrypt
+        import passlib, passlib.context
+        out["bcrypt_version"] = getattr(_bcrypt, "__version__", None) or "unknown"
+        out["passlib_version"] = getattr(passlib, "__version__", None)
+
+        ctx = passlib.context.CryptContext(schemes=["bcrypt"], deprecated="auto")
+        h = ctx.hash("test1234")
+        out["bcrypt_hash_ok"] = bool(h and ctx.verify("test1234", h))
+    except Exception as e:
+        out["bcrypt_error"] = f"{type(e).__name__}: {e}"
+        out["bcrypt_trace"] = traceback.format_exc()
+        out["ok"] = False
+
+    # JWT の生成/検証テスト
+    try:
+        from jose import jwt
+        token = jwt.encode({"sub": "selftest", "exp": datetime.utcnow() + timedelta(minutes=1)},
+                           sk or "dummy-secret", algorithm="HS256")
+        data = jwt.decode(token, sk or "dummy-secret", algorithms=["HS256"])
+        out["jwt_ok"] = (data.get("sub") == "selftest")
+    except Exception as e:
+        out["jwt_error"] = f"{type(e).__name__}: {e}"
+        out["jwt_trace"] = traceback.format_exc()
+        out["ok"] = False
+
+    # DB 接続テスト
+    try:
+        if engine is None:
+            raise RuntimeError("engine is None")
+        with engine.connect() as con:
+            out["db_select1"] = con.execute(text("SELECT 1")).scalar()
+    except Exception as e:
+        out["db_error"] = f"{type(e).__name__}: {e}"
+        out["db_trace"] = traceback.format_exc()
+        out["ok"] = False
+
+    return JSONResponse(out)
