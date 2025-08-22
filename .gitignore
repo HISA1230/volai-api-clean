@@ -1,0 +1,23 @@
+﻿.env
+tools/.secrets.ps1
+!.env.example
+venv/
+.venv/
+venv_sys/
+__pycache__/
+*.py[cod]
+.python-version
+.mypy_cache/
+.pytest_cache/
+.coverage
+# --- builds / eggs ---
+build/
+dist/
+*.egg-info/
+
+# --- editors ---
+.vscode/
+.DS_Store
+
+# --- generated files (必要なら) ---
+models/shap_summary.csv
