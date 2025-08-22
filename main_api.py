@@ -1,4 +1,6 @@
 # main_api.py
+from dotenv import load_dotenv
+load_dotenv()  # .env を自動読込（存在すれば）。本番では何も起きません。
 import os
 import logging
 from datetime import datetime, timezone
