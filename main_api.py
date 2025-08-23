@@ -37,6 +37,16 @@ app = FastAPI(
     redoc_url=None,
 )
 
+# --- 追加: JSONレスポンスに charset=utf-8 を強制付与 ---
+@app.middleware("http")
+async def add_utf8_charset(request, call_next):
+    response = await call_next(request)
+    ct = response.headers.get("content-type", "")
+    if ct.startswith("application/json") and "charset=" not in ct.lower():
+        response.headers["content-type"] = "application/json; charset=utf-8"
+    return response
+# --- 追加ここまで ---
+
 # ==============================
 # /debug 全体を ADMIN_TOKEN で保護（最終ゲート）
 # 空白混入対策で strip() を双方に適用
