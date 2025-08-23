@@ -2,14 +2,12 @@ fastapi
 uvicorn[standard]
 sqlalchemy>=2.0
 psycopg2-binary
-python-jose[cryptography]
-passlib[bcrypt]
-bcrypt<4.2
 email-validator>=2.2
 pydantic>=2
 pandas
 python-dotenv
-# --- auth pins ---
-passlib[bcrypt]==1.7.4
+
+# --- auth pins (唯一の指定はこれだけに) ---
 bcrypt==4.0.1
+passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
