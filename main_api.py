@@ -1,20 +1,27 @@
 # main_api.py
 from dotenv import load_dotenv
-load_dotenv()  # .env を自動読込（存在すれば）。本番では何も起きません。
+load_dotenv()  # .env を自動読込（存在すれば）
+
 import os
 import logging
-from datetime import datetime, timezone
+import traceback
+from datetime import datetime, timezone, timedelta
 from typing import List
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import inspect
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
-# DBまわり（/health での軽い疎通に備えて import だけ）
+from sqlalchemy import inspect, text
+
+# ==============================
+# DBエンジン（/health はDB非依存、/debug は使用）
+# ==============================
 try:
     from database.database_user import engine
-except Exception:  # DB未設定でもアプリ自体は起動できるように
+except Exception:
     engine = None
 
 # -----------------------------
@@ -29,6 +36,24 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url=None,
 )
+
+# ==============================
+# /debug 全体を ADMIN_TOKEN で保護（最終ゲート）
+# 空白混入対策で strip() を双方に適用
+# ==============================
+class AdminTokenMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/debug"):
+            admin = (os.getenv("ADMIN_TOKEN") or "").strip()
+            if not admin:
+                return JSONResponse(status_code=500, content={"detail": "ADMIN_TOKEN not configured"})
+            token = (request.headers.get("X-Admin-Token") or "").strip()
+            if token != admin:
+                return JSONResponse(status_code=403, content={"detail": "admin token required"})
+        return await call_next(request)
+
+app.add_middleware(AdminTokenMiddleware)
 
 # -----------------------------
 # ログ設定（Renderなら標準出力へ）
@@ -112,10 +137,15 @@ def health():
     # シンプル版（DBに触れない）
     return {"ok": True}
 
-# -----------------------------
-# デバッグ：どのルーターが載っているか
-# -----------------------------
-@app.get("/debug/routers")
+# ==============================
+# /debug 系（グローバルミドルウェアで保護済み）
+# ==============================
+@app.get("/debug/ping", summary="Debug Ping (light)")
+def debug_ping():
+    # 権限/ネット瞬断を切り分ける最軽量のエンドポイント
+    return {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
+
+@app.get("/debug/routers", summary="Debug Routers")
 def debug_routers():
     return {
         "auth_loaded": bool(auth_router is not None),
@@ -128,12 +158,9 @@ def debug_routers():
         "scheduler_error": _SCHED_ERR,
     }
 
-# ==============================
-# 一時デバッグAPI：DBテーブル確認/作成
-# ==============================
-from models.models_user import Base  # 既にimport済みなら重複不要だが安全のため
+from models.models_user import Base  # テーブル作成用
 
-@app.get("/debug/dbcheck")
+@app.get("/debug/dbcheck", summary="Debug Dbcheck")
 def debug_dbcheck():
     if engine is None:
         return JSONResponse(status_code=500, content={"ok": False, "error": "engine is None (DB not configured)"})
@@ -151,7 +178,7 @@ def debug_dbcheck():
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
-@app.post("/debug/dbcreate")
+@app.post("/debug/dbcreate", summary="Debug Dbcreate")
 def debug_dbcreate():
     if engine is None:
         return JSONResponse(status_code=500, content={"ok": False, "error": "engine is None (DB not configured)"})
@@ -160,24 +187,17 @@ def debug_dbcreate():
         return {"ok": True, "created": True}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
-    
-    from fastapi.responses import JSONResponse
 
-@app.get("/debug/dbinfo")
+@app.get("/debug/dbinfo", summary="Debug Dbinfo")
 def debug_dbinfo():
     try:
-        from database.database_user import engine
+        if engine is None:
+            raise RuntimeError("engine is None")
         return {"ok": True, "url": engine.url.render_as_string(hide_password=True)}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
-    
-    # === Debug: runtime self test (bcrypt / jwt / db) ===
-from fastapi.responses import JSONResponse
-from sqlalchemy import text
-import os, traceback
-from datetime import datetime, timedelta
 
-@app.get("/debug/selftest")
+@app.get("/debug/selftest", summary="Debug Selftest")
 def debug_selftest():
     out = {"ok": True}
 
@@ -204,8 +224,11 @@ def debug_selftest():
     # JWT の生成/検証テスト
     try:
         from jose import jwt
-        token = jwt.encode({"sub": "selftest", "exp": datetime.utcnow() + timedelta(minutes=1)},
-                           sk or "dummy-secret", algorithm="HS256")
+        token = jwt.encode(
+            {"sub": "selftest", "exp": datetime.utcnow() + timedelta(minutes=1)},
+            sk or "dummy-secret",
+            algorithm="HS256",
+        )
         data = jwt.decode(token, sk or "dummy-secret", algorithms=["HS256"])
         out["jwt_ok"] = (data.get("sub") == "selftest")
     except Exception as e:
