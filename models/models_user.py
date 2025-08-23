@@ -8,23 +8,6 @@ from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
-# 既存の import に String を含めてください
-from sqlalchemy import Column, Integer, String, DateTime, Float
-
-class PredictionLog(Base):
-    __tablename__ = "prediction_logs"
-    id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime, nullable=False)
-    sector = Column(String(32))
-    size = Column(String(16))
-    time_window = Column(String(32))
-    pred_vol = Column(Float)
-    abs_error = Column(Float)
-    comment = Column(String(255))
-
-    # ★ 追加（日本語OK・既定は「共用」）
-    owner = Column(String(32), nullable=False, default="共用", index=True)
-
 # =========================
 # ユーザー
 # =========================
