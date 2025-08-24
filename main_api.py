@@ -131,7 +131,7 @@ except Exception as e:
 
 # ← ここが今回の追加（owners ルーター）
 try:
-    from routers import owners_router as _owners_router
+    import routers.owners_router as _owners_router
     owners_router = _owners_router.router
     app.include_router(owners_router)
 except Exception as e:
