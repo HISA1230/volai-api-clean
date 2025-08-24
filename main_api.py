@@ -37,7 +37,7 @@ app = FastAPI(
     redoc_url=None,
 )
 
-# --- 追加: JSONレスポンスに charset=utf-8 を強制付与 ---
+# --- JSONレスポンスに charset=utf-8 を強制付与 ---
 @app.middleware("http")
 async def add_utf8_charset(request, call_next):
     response = await call_next(request)
@@ -45,7 +45,6 @@ async def add_utf8_charset(request, call_next):
     if ct.startswith("application/json") and "charset=" not in ct.lower():
         response.headers["content-type"] = "application/json; charset=utf-8"
     return response
-# --- 追加ここまで ---
 
 # ==============================
 # /debug 全体を ADMIN_TOKEN で保護（最終ゲート）
@@ -95,8 +94,8 @@ app.add_middleware(
 # -----------------------------
 # ルーター読込（失敗しても起動は継続）
 # -----------------------------
-auth_router = models_router = predict_router = scheduler_router = None
-_AUTH_ERR = _MODELS_ERR = _PREDICT_ERR = _SCHED_ERR = None
+auth_router = models_router = predict_router = scheduler_router = owners_router = None
+_AUTH_ERR = _MODELS_ERR = _PREDICT_ERR = _SCHED_ERR = _OWNERS_ERR = None
 
 try:
     from routers import user_router
@@ -130,6 +129,15 @@ except Exception as e:
     _SCHED_ERR = str(e)
     logger.exception("scheduler router load failed: %s", e)
 
+# ← ここが今回の追加（owners ルーター）
+try:
+    from routers import owners_router as _owners_router
+    owners_router = _owners_router.router
+    app.include_router(owners_router)
+except Exception as e:
+    _OWNERS_ERR = str(e)
+    logger.exception("owners router load failed: %s", e)
+
 # -----------------------------
 # ルート & ヘルス
 # -----------------------------
@@ -162,10 +170,12 @@ def debug_routers():
         "models_loaded": bool(models_router is not None),
         "predict_loaded": bool(predict_router is not None),
         "scheduler_loaded": bool(scheduler_router is not None),
+        "owners_loaded": bool(owners_router is not None),   # 追加
         "auth_error": _AUTH_ERR,
         "models_error": _MODELS_ERR,
         "predict_error": _PREDICT_ERR,
         "scheduler_error": _SCHED_ERR,
+        "owners_error": _OWNERS_ERR,                        # 追加
     }
 
 from models.models_user import Base  # テーブル作成用
