@@ -2,19 +2,64 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
-from typing import Any, Dict, List, Optional
-from sqlalchemy import text
+from typing import Any, Dict, List, Optional, Set
 from datetime import datetime
+from pathlib import Path
 
-# DBエンジン
-from database.database_user import engine
+from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import text
+
+# DBエンジン（安全にインポート）
+try:
+    from database.database_user import engine
+except Exception:
+    engine = None  # type: ignore
 
 router = APIRouter(prefix="/predict", tags=["Predict"])
 
 
-def _get_columns(table: str = "prediction_logs") -> set[str]:
+# ------------------------------------------------------------
+# モデルパス解決（将来の推論/SHAP用。いまは /logs では未使用）
+# ------------------------------------------------------------
+def _resolve_model_path(owner: str | None, explicit_path: str | None) -> str:
+    """優先順位: 明示指定 > ownerの既定 > グローバル既定 > models フォルダ先頭"""
+    # 1) 明示指定
+    if explicit_path:
+        return explicit_path.strip()
+
+    # 2) owner の既定
+    if engine is not None and owner:
+        with engine.connect() as con:
+            row = con.execute(
+                text("SELECT default_model FROM owner_settings WHERE owner=:o"),
+                {"o": owner},
+            ).fetchone()
+        if row and row[0]:
+            return str(row[0])
+
+    # 3) グローバル既定（.default_model.txt）
+    df = Path("models/.default_model.txt")
+    if df.exists():
+        p = df.read_text(encoding="utf-8").strip()
+        if p:
+            return p
+
+    # 4) 最後の砦: models/*.pkl の先頭
+    pkls = sorted(Path("models").glob("*.pkl"))
+    if pkls:
+        return pkls[0].as_posix()
+
+    raise HTTPException(status_code=500, detail="No model available")
+
+
+# ------------------------------------------------------------
+# 可変スキーマ対応のログ取得
+# ------------------------------------------------------------
+def _get_columns(table: str = "prediction_logs") -> Set[str]:
     """information_schema から列名一覧を取得"""
+    if engine is None:
+        raise RuntimeError("DB engine not configured")
+
     sql = text("""
         SELECT column_name
           FROM information_schema.columns
@@ -26,23 +71,23 @@ def _get_columns(table: str = "prediction_logs") -> set[str]:
     return {r[0] for r in rows}
 
 
-def _build_select_sql(cols: set[str], has_owner_filter: bool) -> str:
+def _build_select_sql(cols: Set[str], has_owner_filter: bool) -> str:
     """
-    存在する列だけで SELECT を生成。無い列は返さない（後で None 充填）
+    存在する列だけで SELECT を生成。無い列は返さない（後で None 充填）。
     返すキーは最終的に: id, created_at, sector, size, time_window, pred_vol, abs_error, comment, owner
     """
     parts: List[str] = ["SELECT id"]
 
-    # created_at が無い環境はない想定だが一応チェック
+    # created_at が無い環境はない想定だが一応ケア
     if "created_at" in cols:
         parts.append(", created_at")
     else:
-        # created_at が無いとORDER BYに困るので保険
-        parts.append(", NOW() as created_at")
+        parts.append(", NOW() AS created_at")
 
     # optional列（存在すれば追加、なければ後で None 扱い）
     if "sector" in cols:
         parts.append(", sector")
+
     if "size" in cols:
         parts.append(", size")
     elif "size_category" in cols:
@@ -79,14 +124,11 @@ def _build_select_sql(cols: set[str], has_owner_filter: bool) -> str:
         parts.append(" ORDER BY id DESC")
 
     parts.append(" LIMIT :limit OFFSET :offset")
-
     return "\n".join(parts)
 
 
 def _row_map(row: Any) -> Dict[str, Any]:
-    """
-    RowMapping -> dict へ。欠けてるキーは None を詰める。
-    """
+    """RowMapping -> dict。欠けてるキーは None を詰める。"""
     m = row._mapping
     out = {
         "id": m.get("id"),
@@ -99,7 +141,6 @@ def _row_map(row: Any) -> Dict[str, Any]:
         "comment": m.get("comment") if "comment" in m else None,
         "owner": m.get("owner") if "owner" in m else None,
     }
-    # datetime は ISO に整形（FastAPIでもOKだが明示しておく）
     if isinstance(out["created_at"], datetime):
         out["created_at"] = out["created_at"].isoformat()
     return out
@@ -116,28 +157,31 @@ def get_logs(
     - 列が存在するものだけ SELECT し、足りない項目は None として返す。
     - owner が指定され、かつ列が存在すれば WHERE で絞り込み。
     """
-    cols = _get_columns("prediction_logs")
-    sql = _build_select_sql(cols, has_owner_filter=(owner is not None))
-    params = {"limit": limit, "offset": offset}
-    if owner is not None and "owner" in cols:
-        params["owner"] = owner
+    if engine is None:
+        return {"ok": False, "error": "engine is None (DB not configured)"}
 
     try:
+        cols = _get_columns("prediction_logs")
+        sql = _build_select_sql(cols, has_owner_filter=(owner is not None))
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if owner is not None and "owner" in cols:
+            params["owner"] = owner
+
         with engine.connect() as con:
             rows = con.execute(text(sql), params).fetchall()
         return [_row_map(r) for r in rows]
     except Exception as e:
-        # 失敗時は詳細を返してデバッグしやすく
         return {
             "ok": False,
             "error": f"{type(e).__name__}: {e}",
-            "sql": sql,
-            "params": params,
+            # デバッグ用に発行SQLも返す
+            "sql": locals().get("sql"),
+            "params": locals().get("params"),
         }
 
 
-# 既存の SHAP 再計算エンドポイントを維持（実装がある前提）
+# 既存の SHAP 再計算エンドポイントがある前提なら維持
 @router.post("/shap/recompute", summary="Shap Recompute")
 def shap_recompute():
-    # 実装は元のまま/必要に応じて差し戻し
+    # ここは必要に応じて元の実装に差し戻してください
     return {"ok": True, "message": "placeholder (keep existing implementation if you had one)"}
