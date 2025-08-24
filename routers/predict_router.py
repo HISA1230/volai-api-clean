@@ -179,6 +179,70 @@ def get_logs(
             "params": locals().get("params"),
         }
 
+# ---- ここから追加：ログサマリー ----
+from fastapi import HTTPException
+
+@router.get("/logs/summary", summary="Logs summary (counts)")
+def logs_summary(
+    owner: Optional[str] = Query(None, description="このownerに限定（例: 共用 / 学也 など）"),
+    by: Optional[str] = Query(
+        None,
+        description="グルーピング列: owner / sector / size / time_window（未指定なら owner→sector→size の順に自動選択）",
+    ),
+):
+    if engine is None:
+        raise HTTPException(status_code=500, detail="DB engine not configured")
+
+    cols = _get_columns("prediction_logs")
+
+    # size は size / size_category どちらにも対応
+    def resolve_group_expr(by_val: Optional[str]) -> Optional[str]:
+        if not by_val:
+            # デフォルトの優先順位
+            for cand in ("owner", "sector", "size", "time_window"):
+                ge = resolve_group_expr(cand)
+                if ge:
+                    return ge
+            return None
+
+        if by_val == "size":
+            if "size" in cols:
+                return "size"
+            if "size_category" in cols:
+                return "size_category"
+            return None
+
+        # それ以外はそのまま列があれば使う
+        return by_val if by_val in cols else None
+
+    group_expr = resolve_group_expr(by)
+
+    # WHERE 句
+    where_sql = ""
+    params: Dict[str, Any] = {}
+    if owner is not None and "owner" in cols:
+        where_sql = "WHERE owner = :owner"
+        params["owner"] = owner
+
+    from sqlalchemy import text as _t
+
+    with engine.connect() as con:
+        if group_expr:
+            sql = f"""
+                SELECT {group_expr} AS key, COUNT(*) AS count
+                  FROM prediction_logs
+                  {where_sql}
+                 GROUP BY {group_expr}
+                 ORDER BY COUNT(*) DESC, {group_expr} NULLS LAST
+            """
+            rows = con.execute(_t(sql), params).all()
+            return [{"key": r[0], "count": int(r[1])} for r in rows]
+        else:
+            # グループ化できる列がない or テーブル最小構成
+            sql = f"SELECT COUNT(*) FROM prediction_logs {where_sql}"
+            n = con.execute(_t(sql), params).scalar() or 0
+            return {"count": int(n)}
+# ---- 追加 ここまで ----
 
 # 既存の SHAP 再計算エンドポイントがある前提なら維持
 @router.post("/shap/recompute", summary="Shap Recompute")
