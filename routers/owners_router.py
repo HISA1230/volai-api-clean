@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Body, Query, Depends
+from fastapi.responses import JSONResponse
 from typing import Any, Dict, Optional
 import json
 
@@ -40,7 +41,7 @@ DEFAULT_PARAMS: Dict[str, Any] = {
         "symbols_exclude": None,
     },
     "training": {
-        "cadence_days": 14  # 再学習の目安（日）
+        "cadence_days": 14
     },
 }
 
@@ -99,33 +100,43 @@ def upsert_settings(
     if not isinstance(new_params, dict):
         raise HTTPException(400, "params must be a JSON object")
 
-    with engine.begin() as con:
-        # オーナーが未登録なら owners に作成
-        con.execute(text("INSERT INTO owners(name) VALUES (:o) ON CONFLICT DO NOTHING"), {"o": o})
-        # 現在値を取得してマージ
-        row = con.execute(text("SELECT params FROM owner_settings WHERE owner=:o"), {"o": o}).fetchone()
-        cur: Dict[str, Any] = {}
-        if row:
-            p = row[0]
-            if isinstance(p, dict):
-                cur = p
-            elif isinstance(p, str):
-                try:
-                    cur = json.loads(p)
-                except Exception:
-                    cur = {}
-        merged = _deep_merge(cur, new_params)
-        # アップサート
-        con.execute(
-            text("""
-                INSERT INTO owner_settings(owner, params, updated_at)
-                VALUES (:o, :p::jsonb, NOW())
-                ON CONFLICT (owner) DO UPDATE
-                   SET params = EXCLUDED.params,
-                       updated_at = EXCLUDED.updated_at
-            """),
-            {"o": o, "p": json.dumps(merged, ensure_ascii=False)},
-        )
+    try:
+        with engine.begin() as con:
+            # オーナーが未登録なら owners に作成
+            con.execute(text("INSERT INTO owners(name) VALUES (:o) ON CONFLICT DO NOTHING"), {"o": o})
 
-    effective = _deep_merge(DEFAULT_PARAMS, merged)
-    return {"ok": True, "owner": o, "params": merged, "effective": effective}
+            # 現在値を取得してマージ
+            row = con.execute(text("SELECT params FROM owner_settings WHERE owner=:o"), {"o": o}).fetchone()
+            cur: Dict[str, Any] = {}
+            if row:
+                p = row[0]
+                if isinstance(p, dict):
+                    cur = p
+                elif isinstance(p, str):
+                    try:
+                        cur = json.loads(p)
+                    except Exception:
+                        cur = {}
+
+            merged = _deep_merge(cur, new_params)
+
+            # ← ここを環境依存しにくい書き方に（CAST を明示）
+            con.execute(
+                text("""
+                    INSERT INTO owner_settings(owner, params, updated_at)
+                    VALUES (:o, CAST(:p AS jsonb), NOW())
+                    ON CONFLICT (owner) DO UPDATE
+                       SET params = EXCLUDED.params,
+                           updated_at = EXCLUDED.updated_at
+                """),
+                {"o": o, "p": json.dumps(merged, ensure_ascii=False)},
+            )
+
+        effective = _deep_merge(DEFAULT_PARAMS, merged)
+        return {"ok": True, "owner": o, "params": merged, "effective": effective}
+
+    except SQLAlchemyError as e:
+        # ここでエラー内容を JSON で返す（デバッグしやすくする）
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(e).__name__}: {e}"})
