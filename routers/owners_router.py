@@ -140,3 +140,71 @@ def upsert_settings(
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(e).__name__}: {e}"})
+    
+    # --- 既定モデル: オーナー別のデフォルトモデルを取得/設定 --------------------
+
+@router.get("/default_model")
+def get_default_model(
+    owner: Optional[str] = Query(None, description="未指定なら '共用'"),
+    current_user: Any = Depends(_auth_dep),
+):
+    if engine is None:
+        raise HTTPException(500, "DB engine not configured")
+    o = owner or "共用"
+    with engine.connect() as con:
+        row = con.execute(text("SELECT params FROM owner_settings WHERE owner=:o"), {"o": o}).fetchone()
+    default_model = None
+    if row:
+        p = row[0]
+        try:
+            obj = p if isinstance(p, dict) else json.loads(p)
+            if isinstance(obj, dict):
+                default_model = obj.get("default_model")
+        except Exception:
+            pass
+    return {"owner": o, "default_model": default_model}
+
+@router.post("/default_model")
+def set_default_model(
+    body: Dict[str, Any] = Body(..., description="{'owner': '学也', 'model_path': 'models/vol_model.pkl'}"),
+    current_user: Any = Depends(_auth_dep),
+):
+    if engine is None:
+        raise HTTPException(500, "DB engine not configured")
+
+    o = (body.get("owner") or "").strip()
+    m = (body.get("model_path") or "").strip()
+    if not o:
+        raise HTTPException(400, "owner is required")
+    if not m:
+        raise HTTPException(400, "model_path is required")
+
+    with engine.begin() as con:
+        # ensure owner row exists
+        con.execute(text("INSERT INTO owners(name) VALUES (:o) ON CONFLICT DO NOTHING"), {"o": o})
+        # load current params
+        row = con.execute(text("SELECT params FROM owner_settings WHERE owner=:o"), {"o": o}).fetchone()
+        cur: Dict[str, Any] = {}
+        if row:
+            p = row[0]
+            if isinstance(p, dict):
+                cur = p
+            else:
+                try:
+                    cur = json.loads(p)
+                except Exception:
+                    cur = {}
+        # set default_model and upsert
+        cur["default_model"] = m
+        con.execute(
+            text("""
+                INSERT INTO owner_settings(owner, params, updated_at)
+                VALUES (:o, :p::jsonb, NOW())
+                ON CONFLICT (owner) DO UPDATE
+                   SET params = EXCLUDED.params,
+                       updated_at = EXCLUDED.updated_at
+            """),
+            {"o": o, "p": json.dumps(cur, ensure_ascii=False)},
+        )
+
+    return {"ok": True, "owner": o, "default_model": m}
