@@ -51,7 +51,9 @@ def _tmin(s: Optional[str]) -> Optional[int]:
 # ------------------------------------------------------------
 # /predict/logs/summary : 集計（owner/sector/size）— ★ここが本題
 # ------------------------------------------------------------
-@router.get("/logs/summary", summary="Logs summary (counts) v6")
+# routers/predict_router.py の logs_summary を丸ごと差し替え
+
+@router.get("/logs/summary", summary="Logs summary (counts) v7")
 def logs_summary(
     by: Literal["owner", "sector", "size"] = Query("owner", description="集計軸"),
     owner: Optional[str] = Query(None, description="このownerに限定（例: 共用 / 学也 など）"),
@@ -65,16 +67,13 @@ def logs_summary(
 
     cols = _get_columns("prediction_logs")
 
-    # 集計キーの式
     if by == "owner":
-        if "owner" not in cols:
-            return []
+        if "owner" not in cols: return []
         key_expr = "COALESCE(owner, '(NA)')"
     elif by == "sector":
-        if "sector" not in cols:
-            return []
+        if "sector" not in cols: return []
         key_expr = "COALESCE(sector, '(NA)')"
-    else:  # size
+    else:
         if "size" in cols:
             key_expr = "COALESCE(size, '(NA)')"
         elif "size_category" in cols:
@@ -82,33 +81,34 @@ def logs_summary(
         else:
             return []
 
+    def _tmin(s: Optional[str]) -> Optional[int]:
+        if not s: return None
+        try:
+            h, m = s.split(":"); return int(h)*60 + int(m)
+        except Exception:
+            return None
+
     params: Dict[str, Any] = {}
     where = ["1=1"]
 
     if owner and "owner" in cols:
-        where.append("owner = :owner")
-        params["owner"] = owner
+        where.append("owner = :owner"); params["owner"] = owner
 
     if start:
         where.append("created_at >= (:start)::timestamptz")
         params["start"] = start.isoformat()
-
     if end:
-        # 当日を含める（< end+1day）
         where.append("created_at < ((:end)::date + interval '1 day')::timestamptz")
         params["end"] = end.isoformat()
 
-    # 時刻（DBタイムゾーン基準, 日跨ぎ対応）
-    t1 = _tmin(time_start)
-    t2 = _tmin(time_end)
+    t1, t2 = _tmin(time_start), _tmin(time_end)
     if t1 is not None and t2 is not None:
-        m_expr = "(EXTRACT(HOUR FROM created_at)::int * 60 + EXTRACT(MINUTE FROM created_at)::int)"
+        minutes_expr = "(EXTRACT(HOUR FROM created_at)::int * 60 + EXTRACT(MINUTE FROM created_at)::int)"
         if t1 <= t2:
-            where.append(f"{m_expr} BETWEEN :t1 AND :t2")
+            where.append(f"{minutes_expr} BETWEEN :t1 AND :t2")
         else:
-            where.append(f"({m_expr} >= :t1 OR {m_expr} <= :t2)")
-        params["t1"] = t1
-        params["t2"] = t2
+            where.append(f"({minutes_expr} >= :t1 OR {minutes_expr} <= :t2)")
+        params["t1"], params["t2"] = t1, t2
 
     sql = f"""
         SELECT {key_expr} AS key, COUNT(*)::bigint AS count
@@ -117,7 +117,6 @@ def logs_summary(
          GROUP BY 1
          ORDER BY count DESC, key ASC
     """
-
     try:
         with engine.connect() as con:
             rows = con.execute(text(sql), params).mappings().all()
