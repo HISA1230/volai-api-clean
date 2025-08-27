@@ -13,8 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-
 from sqlalchemy import inspect, text
+from fastapi.openapi.utils import get_openapi
 
 # ==============================
 # DBエンジン（/health はDB非依存、/debug は使用）
@@ -28,7 +28,8 @@ except Exception:
 # アプリ基本情報
 # -----------------------------
 APP_NAME = os.getenv("APP_NAME", "Volatility AI API")
-APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
+# 環境変数があればそちらを優先。なければ下記のデフォルトが使われる
+APP_VERSION = os.getenv("APP_VERSION", "2025-08-27-v8")
 
 app = FastAPI(
     title=APP_NAME,
@@ -48,7 +49,6 @@ async def add_utf8_charset(request, call_next):
 
 # ==============================
 # /debug 全体を ADMIN_TOKEN で保護（最終ゲート）
-# 空白混入対策で strip() を双方に適用
 # ==============================
 class AdminTokenMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -75,7 +75,6 @@ logger = logging.getLogger(__name__)
 
 # -----------------------------
 # CORS（本番はUIドメインに絞る）
-#   例: CORS_ALLOW_ORIGINS="https://your-ui.example.com,https://volai-ui.onrender.com"
 # -----------------------------
 origins_env = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
 if origins_env == "*" or origins_env == "":
@@ -129,7 +128,7 @@ except Exception as e:
     _SCHED_ERR = str(e)
     logger.exception("scheduler router load failed: %s", e)
 
-# ← ここが今回の追加（owners ルーター）
+# owners ルーター（ある場合だけ）
 try:
     import routers.owners_router as _owners_router
     owners_router = _owners_router.router
@@ -152,7 +151,6 @@ def root():
 
 @app.get("/health")
 def health():
-    # シンプル版（DBに触れない）
     return {"ok": True}
 
 # ==============================
@@ -160,23 +158,21 @@ def health():
 # ==============================
 @app.get("/debug/ping", summary="Debug Ping (light)")
 def debug_ping():
-    # 権限/ネット瞬断を切り分ける最軽量のエンドポイント
     return {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
 
-@app.get("/debug/routers", summary="Debug Routers")
-def debug_routers():
-    return {
-        "auth_loaded": bool(auth_router is not None),
-        "models_loaded": bool(models_router is not None),
-        "predict_loaded": bool(predict_router is not None),
-        "scheduler_loaded": bool(scheduler_router is not None),
-        "owners_loaded": bool(owners_router is not None),   # 追加
-        "auth_error": _AUTH_ERR,
-        "models_error": _MODELS_ERR,
-        "predict_error": _PREDICT_ERR,
-        "scheduler_error": _SCHED_ERR,
-        "owners_error": _OWNERS_ERR,                        # 追加
-    }
+@app.get("/debug/routes_dump", include_in_schema=False)
+def _routes_dump():
+    out = []
+    for r in app.routes:
+        try:
+            methods = sorted(list(getattr(r, "methods", [])))
+            path = getattr(r, "path", "")
+            name = getattr(r, "name", "")
+            summary = getattr(getattr(r, "endpoint", None), "summary", None)
+            out.append({"path": path, "methods": methods, "name": name, "summary": summary})
+        except Exception:
+            pass
+    return out
 
 from models.models_user import Base  # テーブル作成用
 
@@ -268,3 +264,113 @@ def debug_selftest():
         out["ok"] = False
 
     return JSONResponse(out)
+
+# ==============================
+# OpenAPI: リフレッシュ & no-cache & 安全版 + パラメータ注入
+# ==============================
+@app.post("/ops/openapi/refresh", include_in_schema=False)
+@app.get("/ops/openapi/refresh", include_in_schema=False)
+def ops_refresh_openapi(request: Request):
+    admin = (os.getenv("ADMIN_TOKEN") or "").strip()
+    token = (request.headers.get("X-Admin-Token") or "").strip()
+    if not admin:
+        return JSONResponse(status_code=500, content={"detail": "ADMIN_TOKEN not configured"})
+    if token != admin:
+        return JSONResponse(status_code=403, content={"detail": "admin token required"})
+    app.openapi_schema = None
+    return JSONResponse(app.openapi())
+
+@app.post("/debug/openapi/refresh", include_in_schema=False)
+@app.get("/debug/openapi/refresh", include_in_schema=False)
+def debug_refresh_openapi():
+    app.openapi_schema = None
+    return JSONResponse(app.openapi())
+
+@app.get("/openapi.json", include_in_schema=False)
+def overridden_openapi_json():
+    spec = app.openapi()
+    return JSONResponse(
+        spec,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+def custom_openapi():
+    # 既に生成済みならそれを返す
+    if getattr(app, "openapi_schema", None):
+        return app.openapi_schema
+
+    schema = get_openapi(
+        title=APP_NAME,
+        version=APP_VERSION,
+        description="API for volatility AI",
+        routes=app.routes,
+    )
+
+    # 反映確認用フラグ
+    schema.setdefault("info", {})["x-openapi-patched"] = "logs-summary-params+no-cache+tz_offset-v8"
+
+    # /predict/logs/summary のパラメータ強制注入
+    try:
+        path_key = "/predict/logs/summary"
+        get_op = schema["paths"][path_key]["get"]
+        params = get_op.setdefault("parameters", [])
+        existing = {p.get("name") for p in params}
+
+        def add_param(name, schema_obj, description):
+            if name in existing:
+                return
+            params.append({
+                "name": name,
+                "in": "query",
+                "required": False,
+                "schema": schema_obj,
+                "description": description,
+            })
+            existing.add(name)
+
+        add_param("start", {"type": "string", "format": "date", "title": "Start"}, "開始日 YYYY-MM-DD")
+        add_param("end", {"type": "string", "format": "date", "title": "End"}, "終了日 YYYY-MM-DD（当日を含む集計）")
+        add_param("time_start", {"type": "string", "pattern": r"^\d{2}:\d{2}$", "title": "Time Start"}, "開始時刻 HH:MM（例 09:30）")
+        add_param("time_end", {"type": "string", "pattern": r"^\d{2}:\d{2}$", "title": "Time End"}, "終了時刻 HH:MM（例 15:00）")
+        add_param("tz_offset", {"type": "integer", "title": "Timezone offset (minutes)", "default": 0},
+                  "ローカル→UTCの分オフセット（例: JST=540, PDT=-420）")
+    except Exception:
+        pass
+
+    # 認証スキーム追記
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})
+    schema["components"]["securitySchemes"]["BearerAuth"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+    }
+    for path_item in schema.get("paths", {}).values():
+        for op in path_item.values():
+            if isinstance(op, dict):
+                sec = op.get("security") or []
+                sec.append({"BearerAuth": []})
+                op["security"] = sec
+
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+@app.get("/debug/code_fingerprint", include_in_schema=False)
+def _code_fingerprint():
+    try:
+        import routers.predict_router as pr, os
+        p = pr.__file__
+        st = os.stat(p)
+        return {
+            "predict_router_file": p,
+            "mtime": st.st_mtime,
+            "mtime_iso": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+# FastAPI に適用
+app.openapi = custom_openapi
