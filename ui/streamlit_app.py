@@ -4,7 +4,7 @@ Streamlit UI — 見栄え仕上げ v1（互換ブリッジ & 柔軟ペイロー
 - 固定列: 日付(ローカル) / 時間帯 / セクター / サイズ / 予測ボラ / だまし率 / 信頼度 / コメント / 推奨
 - 絵文字バッジ & フィルタ付き
 - /api/predict/latest が 404 の場合は /api/strategy/latest にフォールバック
-- {"data":[...]} などの dict 返却にも対応（data/rows/items/result/records を探索、または value-list を抽出）
+- {"data":[...]} 等の dict 返却にも対応（data/rows/items/result/records または dict-of-dicts）
 """
 
 from __future__ import annotations
@@ -21,17 +21,23 @@ import streamlit as st
 # --------------------------------------------
 # ページ設定
 # --------------------------------------------
-st.set_page_config(
-    page_title="Volatility AI — Predict View",
-    page_icon="📈",
-    layout="wide",
-)
+st.set_page_config(page_title="Volatility AI — Predict View", page_icon="📈", layout="wide")
+
+# --- session_state 初期化と遅延リセット処理（ウィジェット生成より前に！） ---
+if "min_conf" not in st.session_state:
+    st.session_state["min_conf"] = 0.0
+if "max_fake" not in st.session_state:
+    st.session_state["max_fake"] = 1.0
+# 中央/サイドバーのリセットボタンからフラグが立っていたら、ここで実リセット
+if st.session_state.get("_defer_reset", False):
+    st.session_state["min_conf"] = 0.0
+    st.session_state["max_fake"] = 1.0
+    st.session_state["_defer_reset"] = False
 
 # --------------------------------------------
 # ユーティリティ
 # --------------------------------------------
 def _parse_num(x: Any) -> Optional[float]:
-    """'0.62 🟢' のような文字から数値を抽出"""
     if x is None:
         return None
     if isinstance(x, (int, float)):
@@ -42,55 +48,148 @@ def _parse_num(x: Any) -> Optional[float]:
 
 def _compat_bridge(df: pd.DataFrame) -> pd.DataFrame:
     """
-    旧API（/api/strategy/latest）由来の日本語カラムを
-    新スキーマ（/api/predict/latest 相当）にマッピングする暫定ブリッジ
-    旧: 時刻, セクター, 窓[h], 平均スコア(色), ポジ比率, ボリューム, 銘柄
-    新: ts_utc, sector, time_band, pred_vol, confidence, (fake_rate=None), symbols
+    入力 DataFrame を標準スキーマへ正規化:
+      ts_utc, sector, symbols, time_band, pred_vol, confidence, fake_rate, size, market_cap, price
+    - JPカラム: 時刻/セクター/銘柄/窓[h]/平均スコア(色)/ポジ比率/時価総額/終値 など
+    - ENカラム: ts/window_hours/avg_score/pos_ratio/market_cap/... など
     """
-    if not {"時刻", "セクター"}.issubset(set(df.columns)):
-        return df  # 旧形式でなければ何もしない
-
+    if df is None or df.empty:
+        return df
     df = df.copy()
-    df.rename(columns={
-        "時刻": "ts_utc",
-        "セクター": "sector",
-        "銘柄": "symbols",
-    }, inplace=True)
 
-    # time_band は「窓[h]」を文字で代用（なければ空）
-    if "窓[h]" in df.columns:
-        df["time_band"] = df["窓[h]"].apply(lambda v: f"{v}h" if v not in (None, "") else "")
+    # --- JP→標準 ---
+    ren = {}
+    if "時刻" in df.columns:     ren["時刻"]   = "ts_utc"
+    if "セクター" in df.columns: ren["セクター"] = "sector"
+    if "銘柄" in df.columns:     ren["銘柄"]   = "symbols"
+    if "終値" in df.columns:      ren.setdefault("終値", "price")
+    if "株価" in df.columns:      ren.setdefault("株価", "price")
+    if ren:
+        df.rename(columns=ren, inplace=True)
+
+    # --- EN→標準 ---
+    if "ts" in df.columns and "ts_utc" not in df.columns:
+        df.rename(columns={"ts": "ts_utc"}, inplace=True)
+
+    # time_band ← 窓[h] or window_hours → "24h" 等
+    if "time_band" not in df.columns:
+        if "窓[h]" in df.columns:
+            df["time_band"] = df["窓[h]"].apply(lambda v: f"{int(v)}h" if pd.notna(v) and str(v) != "" else "")
+        elif "window_hours" in df.columns:
+            def _fmt(v):
+                try:
+                    return f"{int(float(v))}h" if pd.notna(v) else ""
+                except Exception:
+                    return ""
+            df["time_band"] = df["window_hours"].map(_fmt)
+        else:
+            df["time_band"] = ""
+
+    # pred_vol ← 平均スコア(色) or avg_score
+    if "pred_vol" not in df.columns:
+        if "平均スコア(色)" in df.columns:
+            df["pred_vol"] = df["平均スコア(色)"].map(_parse_num)
+        elif "avg_score" in df.columns:
+            df["pred_vol"] = pd.to_numeric(df["avg_score"], errors="coerce")
+
+    # confidence ← ポジ比率 or pos_ratio
+    if "confidence" not in df.columns:
+        if "ポジ比率" in df.columns:
+            df["confidence"] = df["ポジ比率"].map(_parse_num)
+        elif "pos_ratio" in df.columns:
+            df["confidence"] = pd.to_numeric(df["pos_ratio"], errors="coerce")
+
+    # price（ペニー判定の補助・任意）
+    if "price" not in df.columns:
+        for c in ["last", "last_price", "close", "adj_close"]:
+            if c in df.columns:
+                df.rename(columns={c: "price"}, inplace=True)
+                break
+    if "price" in df.columns:
+        df["price"] = pd.to_numeric(df["price"], errors="coerce")
+
+    # size ラベル（既存の表記を標準化）
+    if "size" not in df.columns:
+        for c in ["Size", "cap_size", "size_class", "size_category", "サイズ"]:
+            if c in df.columns:
+                df.rename(columns={c: "size"}, inplace=True)
+                break
+    if "size" in df.columns:
+        def _norm_size(s):
+            if s is None or (isinstance(s, float) and pd.isna(s)):
+                return ""
+            t = str(s).strip().lower()
+            t2 = re.sub(r"[^a-z]", "", t)
+            if t2 in ("large","larges","lg","megacap","mega","xl"): return "Large"
+            if t2 in ("mid","midcap","medium","md"):                return "Mid"
+            if t2 in ("small","smallcap","sm"):                     return "Small"
+            if t2 in ("micro","microcap","mc","nano","nanocap"):    return "Micro"
+            if "penny" in t:                                       return "Penny"
+            if t in ("大","大型"):   return "Large"
+            if t in ("中","中型"):   return "Mid"
+            if t in ("小","小型"):   return "Small"
+            if t in ("極小","ﾏｲｸﾛ"): return "Micro"
+            return ""
+        df["size"] = df["size"].map(_norm_size)
     else:
-        df["time_band"] = ""
+        df["size"] = ""
 
-    # pred_vol ← 平均スコア(色)
-    if "平均スコア(色)" in df.columns and "pred_vol" not in df.columns:
-        df["pred_vol"] = df["平均スコア(色)"].map(_parse_num)
+    # market_cap（候補名が無ければ欠損のまま）
+    if "market_cap" not in df.columns:
+        for c in ("market_cap","marketcap","mktcap","market_capitalization","時価総額"):
+            if c in df.columns:
+                df.rename(columns={c: "market_cap"}, inplace=True)
+                break
+    if "market_cap" in df.columns:
+        df["market_cap"] = pd.to_numeric(df["market_cap"], errors="coerce")
 
-    # confidence ← ポジ比率
-    if "ポジ比率" in df.columns and "confidence" not in df.columns:
-        df["confidence"] = df["ポジ比率"].map(_parse_num)
-
-    # fake_rate は旧データに存在しない想定なので None
+    # デフォルト列
     if "fake_rate" not in df.columns:
         df["fake_rate"] = None
+    if "symbols" not in df.columns:
+        df["symbols"] = ""
 
-    # size は旧データに対応なし → 空文字
-    if "size" not in df.columns:
-        df["size"] = ""
+    # ---- 追加フォールバック：セレクタが空にならないよう最低限の値を埋める ----
+    # time_band が全て空なら window_hours → "Nh" で復元。なければデモ用 "24h"
+    try:
+        tb = df["time_band"].fillna("")
+        if tb.eq("").all():
+            if "window_hours" in df.columns:
+                df["time_band"] = df["window_hours"].map(lambda v: f"{int(v)}h" if pd.notna(v) else "")
+            # それでも空なら 24h を入れてフィルタを生かす
+            if df["time_band"].fillna("").eq("").all():
+                df["time_band"] = "24h"
+    except Exception:
+        pass
+
+    # size が全て空で volume があるなら、出来高で簡易分類（デモ用）
+    try:
+        sz = df["size"].fillna("")
+        if sz.eq("").all() and "volume" in df.columns:
+            def _size_by_volume(v):
+                try:
+                    v = float(v)
+                except Exception:
+                    return ""
+                if v >= 35: return "Large"
+                elif v >= 18: return "Mid"
+                elif v >= 8:  return "Small"
+                elif v > 0:   return "Micro"
+                else:         return ""
+            df["size"] = df["volume"].map(_size_by_volume)
+    except Exception:
+        pass
 
     return df
 
 
 def _extract_listlike(payload: Any) -> list:
     """
-    APIの返却（list or dict）から、レコードの list を抽出するヘルパ。
-    サポート:
+    API返却からレコード list を抽出:
       - list[dict]
-      - {"data":[...]}, {"rows":[...]}, {"items":[...]}, {"result":[...]}, {"records":[...]}
-      - {"0": {...}, "1": {...}} のような dict-of-dicts
+      - {"data"| "rows"| "items"| "result"| "records": [...]}
+      - dict-of-dicts（values を採用）
       - {"columns":[...], "data":[...]} は data を採用
-    それ以外は空リストを返す
     """
     if payload is None:
         return []
@@ -101,10 +200,8 @@ def _extract_listlike(payload: Any) -> list:
             v = payload.get(k)
             if isinstance(v, list):
                 return v
-        # dict-of-dicts → values を拾う
         if payload and all(isinstance(v, dict) for v in payload.values()):
             return list(payload.values())
-        # {"columns":[...], "data":[...]} ケース
         v = payload.get("data")
         if isinstance(v, list):
             return v
@@ -114,30 +211,28 @@ def _extract_listlike(payload: Any) -> list:
 @st.cache_data(show_spinner=False, ttl=15)
 def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
     """
-    /api/predict/latest を優先して取得。
-    404 の場合は /api/strategy/latest にフォールバックし、互換ブリッジを適用。
-    {"data":[...]} などの dict 返却にも対応。
+    /api/predict/latest を優先、404 なら /api/strategy/latest にフォールバック。
+    柔軟な payload 形状にも対応。
     """
-    predict_url = f"{base.rstrip('/')}/api/predict/latest"
-    strat_url   = f"{base.rstrip('/')}/api/strategy/latest"
+    base = base.rstrip("/")
+    predict_url = f"{base}/api/predict/latest"
+    strat_url   = f"{base}/api/strategy/latest"
 
     used = None
     payload = None
 
-    # 1) 新APIを試す
     try:
-        r = requests.get(predict_url, params={"n": n}, timeout=10)
+        r = requests.get(predict_url, params={"n": n}, timeout=(5, 20))
         if r.status_code == 404:
             raise requests.HTTPError("404 on /api/predict/latest", response=r)
         r.raise_for_status()
         payload = r.json()
         used = "/api/predict/latest"
     except Exception as e1:
-        # 2) 旧API（まず n 付き）→ 400 なら n なし再試行
         try:
-            r = requests.get(strat_url, params={"n": n}, timeout=10)
+            r = requests.get(strat_url, params={"n": n}, timeout=(5, 20))
             if r.status_code == 400:
-                r = requests.get(strat_url, timeout=10)
+                r = requests.get(strat_url, timeout=(5, 20))
             r.raise_for_status()
             payload = r.json()
             used = "/api/strategy/latest"
@@ -147,16 +242,13 @@ def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
             )
 
     st.session_state["endpoint_used"] = used
-
-    # ==== ペイロードから DataFrame を返す（必ず何かを返す設計） ====
     data = _extract_listlike(payload) or []
     st.session_state["payload_shape"] = f"{type(payload).__name__} -> list[{len(data)}]"
 
     df = pd.DataFrame(data)
-    # 旧形式なら新形式へマッピング
     df = _compat_bridge(df)
 
-    # 欠損カラムを補完
+    # 欠損カラム補完
     for col in [
         "ts_utc", "time_band", "sector", "size",
         "pred_vol", "fake_rate", "confidence",
@@ -165,7 +257,7 @@ def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = None
 
-    # ts_utc → ローカル文字列
+    # ts_utc（UTC）→ ローカル文字列
     def to_local(ts: Any) -> str:
         if ts in (None, "", float("nan")):
             return ""
@@ -173,7 +265,7 @@ def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
             s = pd.to_datetime(ts, utc=True, errors="coerce")
             if pd.isna(s):
                 return str(ts)
-            local_tz = datetime.now().astimezone().tzinfo  # 実行環境のローカルTZ
+            local_tz = datetime.now().astimezone().tzinfo
             s_local = s.tz_convert(local_tz)
             return s_local.strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
@@ -184,17 +276,16 @@ def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
     else:
         df["date_local"] = ""
 
-    # symbols が配列ならカンマ区切り文字列に
+    # symbols 正規化
     def norm_symbols(v: Any) -> str:
         if v is None:
             return ""
         if isinstance(v, list):
             return ", ".join(map(str, v))
         return str(v)
-
     df["symbols"] = df["symbols"].map(norm_symbols)
 
-    # 数値化（None/NaN 安全）
+    # 数値化
     def to_float(x: Any) -> Optional[float]:
         try:
             if x is None:
@@ -206,7 +297,6 @@ def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
             return float(x)
         except Exception:
             return None
-
     for col in ["pred_vol", "fake_rate", "confidence"]:
         df[col] = df[col].map(to_float)
 
@@ -214,14 +304,9 @@ def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
 
 
 def grade_with_emoji(value: Optional[float], hi: float, mid: float, *, positive_good: bool) -> str:
-    """絵文字バッジを返す（positive_good=True は高いほど良い）。表示は 0–1 または % をトグルで切替。"""
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "▫️ N/A"
-    # 表示フォーマット
-    if 'USE_PERCENT_BADGE' in globals() and USE_PERCENT_BADGE:
-        disp = f"{value*100:.1f}%"
-    else:
-        disp = f"{value:.2f}"
+    disp = f"{value*100:.1f}%" if globals().get("USE_PERCENT_BADGE", False) else f"{value:.2f}"
     if positive_good:
         if value >= hi:   return f"🟢 {disp}"
         elif value >= mid:return f"🟠 {disp}"
@@ -256,7 +341,7 @@ with st.sidebar:
     st.header("⚙️ 設定")
 
     default_base = os.getenv("VOLAI_API_BASE", "http://127.0.0.1:8021")
-    base_url = st.text_input("API Base URL", value=default_base, help="例: http://127.0.0.1:8021")
+    base_url = st.text_input("API Base URL", value=default_base, help="例: https://volai-api-02.onrender.com")
 
     n = st.slider("取得件数 (n)", 20, 1000, 200, step=20)
     lookback_h = st.slider("直近だけ表示 (hours)", 1, 168, 48)
@@ -273,10 +358,7 @@ with st.sidebar:
         conf_hi = st.number_input("信頼度: High ≥",  value=0.70, min_value=0.0, max_value=1.0, step=0.05)
         conf_mid= st.number_input("信頼度: Mid ≥",   value=0.40, min_value=0.0, max_value=1.0, step=0.05)
 
-        # --- プリセットの初期値（スライダーより前に定義！） ---
-        if "min_conf" not in st.session_state: st.session_state["min_conf"] = 0.0
-        if "max_fake" not in st.session_state: st.session_state["max_fake"] = 1.0
-
+        # プリセット（この時点ではまだスライダーは作らない）
         st.markdown("**表示プリセット**")
         preset = st.radio(
             "一発設定（あとから手動で微調整OK）",
@@ -297,15 +379,14 @@ with st.sidebar:
                 st.toast(f"プリセット「{preset}」適用：信頼度≥{tgt['min_conf']} / だまし率≤{tgt['max_fake']}")
                 st.rerun()
 
-    # リセットボタン（横幅を占有しないよう列でラップ）
-    t1, _ = st.columns([1.9, 8])
-    with t1:
-        if st.button("🔁 全表示にリセット", use_container_width=True):
-            st.session_state["min_conf"] = 0.0
-            st.session_state["max_fake"] = 1.0
+    # サイドバーのリセット（細いカラムで“横一列表示”にして折り返し回避）
+    sb_col, _ = st.columns([1.9, 8])
+    with sb_col:
+        if st.button("🔁 全表示にリセット", use_container_width=True, key="reset_sidebar"):
+            st.session_state["_defer_reset"] = True
             st.rerun()
 
-    # スライダー（※ t1 の外に置く！）
+    # ここで初めてスライダーを作成（キーは session_state と一致）
     min_conf = st.slider("絞り込み: 最低信頼度", 0.0, 1.0, st.session_state["min_conf"], 0.05, key="min_conf")
     max_fake = st.slider("絞り込み: 最大だまし率", 0.0, 1.0, st.session_state["max_fake"], 0.05, key="max_fake")
 
@@ -333,7 +414,6 @@ with st.sidebar:
         with col_cap5:
             small_max_m = st.number_input("Small 最大 ($M)", min_value=10.0, max_value=5000.0, value=2000.0, step=10.0)
 
-        # しきい値の矛盾補正
         msgs = []
         if mid_max_b > large_min_b:
             msgs.append(f"Mid最大({mid_max_b}B) を Large最小({large_min_b}B) に合わせました。")
@@ -357,9 +437,9 @@ with st.sidebar:
             f"Small [{small_min_m:.0f}M, {small_max_m:.0f}M) ｜ "
             f"Micro < {small_min_m:.0f}M"
         )
-        for m in msgs: st.info(m)
+        for m in msgs:
+            st.info(m)
 
-    # ペニー判定
     penny_method = penny_price = penny_cap_m = penny_label = None
     if size_mode == "時価総額＋ペニー判定":
         st.markdown("**ペニー判定**")
@@ -374,14 +454,12 @@ with st.sidebar:
         with col_p2:
             penny_cap_m = st.number_input("時価総額しきい値 $M", min_value=1.0, max_value=5000.0, value=100.0, step=10.0)
         with col_p3:
-            penny_label = st.text_input("ペニーのラベル", value="Penny", help="例：Penny / ペニー / 超小型 など自由に")
+            penny_label = st.text_input("ペニーのラベル", value="Penny", help="例：Penny / ペニー / 超小型 など")
 
-    # 数値の表示形式
     st.markdown("---")
     disp_mode = st.radio("数値表示", ["0–1", "%"], index=0, horizontal=True)
     USE_PERCENT_BADGE = (disp_mode == "%")
 
-    # リフレッシュ
     st.markdown("---")
     refresh = st.button("🔄 再取得 / Refresh", use_container_width=True)
 
@@ -394,24 +472,22 @@ try:
         fetch_predict_latest.clear()
     df_raw = fetch_predict_latest(base_url, n=n)
 except Exception as e:
-    err_box.error(f"{e}\n\n・APIが起動し `/health` が 200 か確認してください\n・`base_url` が正しいか確認してください")
+    err_box.error(f"{e}\n\n・APIが起動し `/health` が 200 か確認\n・`base_url` を確認")
     st.stop()
 
-# ==== None ガード（念のため） ====
 if df_raw is None:
-    err_box.error("APIレスポンスの解釈に失敗しました（df_raw=None）。サイドバーの『再取得』、またはページの Rerun を試してください。")
+    err_box.error("APIレスポンスの解釈に失敗（df_raw=None）。再取得または Rerun を試してください。")
     st.stop()
 
-# 空なら終了
 if df_raw.empty:
-    st.info("データがありません。/api/predict/latest（または互換フォールバック）を確認してください。")
+    st.info("データがありません。/api/predict/latest（フォールバック含む）をご確認ください。")
     st.stop()
 
 endpoint_used = st.session_state.get("endpoint_used", "?")
 payload_shape = st.session_state.get("payload_shape", "?")
 
 # --------------------------------------------
-# サイズ分類（Penny含む）の適用（フィルタUI前に実施）
+# サイズ分類（Penny含む）の適用（フォールバックは _compat_bridge でも実施済）
 # --------------------------------------------
 df_raw = df_raw.copy()
 
@@ -432,15 +508,7 @@ def _first_value(row, cols):
 price_cols = ["price", "last", "last_price", "close", "adj_close"]
 cap_cols   = ["market_cap", "marketcap", "market_capitalization", "mktcap"]
 
-# 範囲対応の分類関数（B/M → USD へ換算済みで判定）
-def classify_by_cap_ranges(
-    mc_usd: float,
-    large_min_b: float,
-    mid_min_b: float,
-    mid_max_b: float,
-    small_min_m: float,
-    small_max_m: float,
-) -> str:
+def classify_by_cap_ranges(mc_usd: float, large_min_b: float, mid_min_b: float, mid_max_b: float, small_min_m: float, small_max_m: float) -> str:
     if mc_usd is None:
         return ""
     large_min = large_min_b * 1e9
@@ -448,36 +516,28 @@ def classify_by_cap_ranges(
     mid_max   = mid_max_b   * 1e9
     small_min = small_min_m * 1e6
     small_max = small_max_m * 1e6
-
-    # Large（上限なし）
     if mc_usd >= large_min:
         return "Large"
-    # Mid の範囲
     if mc_usd >= mid_min and mc_usd < mid_max:
         return "Mid"
-    # Small の範囲（Mid の下端を上限にし、隙間を作らない）
     upper_small = min(small_max, mid_min)
     if mc_usd >= small_min and mc_usd < upper_small:
         return "Small"
-    # Micro
     if mc_usd < small_min:
         return "Micro"
-    # 万一レンジの隙間があっても Small として救済
     if mc_usd < mid_min:
         return "Small"
     return ""
 
 if size_mode != "APIのまま":
-    # 時価総額で Large/Mid/Small/Micro
     def _size_cap(row):
         mc = _first_value(row, cap_cols)
         if mc is None:
-            return row.get("size", "") or ""  # 市場額が無ければ元のsizeを尊重
+            return row.get("size", "") or ""
         return classify_by_cap_ranges(mc, large_min_b, mid_min_b, mid_max_b, small_min_m, small_max_m)
     df_raw["size"] = df_raw.apply(_size_cap, axis=1)
 
 if size_mode == "時価総額＋ペニー判定":
-    # Penny ラベルの上書き（方法に応じて）
     method = penny_method or "両方 (どちらか満たす)"
     cap_thresh = (penny_cap_m or 100.0) * 1e6
     px_thresh  = penny_price or 5.0
@@ -486,27 +546,31 @@ if size_mode == "時価総額＋ペニー判定":
     def _apply_penny(row):
         px = _first_value(row, price_cols)
         mc = _first_value(row, cap_cols)
-
         by_px = (px is not None and px < px_thresh)
         by_mc = (mc is not None and mc < cap_thresh)
-
         if method.startswith("株価のみ"):
             is_penny = by_px
         elif method.startswith("時価総額のみ"):
             is_penny = by_mc
-        else:  # 両方(OR)
+        else:
             is_penny = by_px or by_mc
-
-        return label if is_penny else row.get("size", "") or ""
+        return label if is_penny else (row.get("size", "") or "")
 
     df_raw["size"] = df_raw.apply(_apply_penny, axis=1)
 
 # --------------------------------------------
-# フィルタUI（データに基づく選択肢）
+# フィルタ UI（本文側）
 # --------------------------------------------
 sect_opts = sorted([x for x in df_raw["sector"].dropna().unique().tolist() if x != ""])
 band_opts = sorted([x for x in df_raw["time_band"].dropna().unique().tolist() if x != ""])
 size_opts = sorted([x for x in df_raw["size"].dropna().unique().tolist() if x != ""])
+
+# 中央のクイック操作（ここに“本文側の”全表示リセットボタンを配置）
+btn_col, _ = st.columns([1.8, 8])
+with btn_col:
+    if st.button("🔁 全表示にリセット", use_container_width=True, key="reset_main"):
+        st.session_state["_defer_reset"] = True
+        st.rerun()
 
 fcol1, fcol2, fcol3, fcol4 = st.columns([1.3, 1.1, 1.1, 2.0])
 with fcol1:
@@ -518,18 +582,10 @@ with fcol3:
 with fcol4:
     kw = st.text_input("キーワード（symbols, comment 部分一致）", value="")
 
-# クイック操作（横並び）— 厳選ボタンは廃止、リセットのみ
-t1, _ = st.columns([1.8, 8])
-with t1:
-    if st.button("🔁 全表示にリセット", use_container_width=True):
-        st.session_state["min_conf"] = 0.0
-        st.session_state["max_fake"] = 1.0
-        st.rerun()
-
 st.markdown("---")
 
 # --------------------------------------------
-# フィルタ適用
+# フィルタ適用（ローカル時刻ベース）
 # --------------------------------------------
 now_local = datetime.now().replace(microsecond=0)
 cut = now_local - timedelta(hours=lookback_h)
@@ -540,7 +596,6 @@ try:
 except Exception:
     _df["dt_local"] = pd.NaT
 
-# キーワード（半角スペース/縦棒=OR）
 kw_mask = pd.Series([True] * len(_df))
 if kw:
     tokens = [t for t in re.split(r"[|\s]+", kw.strip()) if t]
@@ -550,7 +605,7 @@ if kw:
         tok = pd.Series(False, index=_df.index)
         for t in tokens:
             tok |= sym.str.contains(t, case=False, na=False, regex=False)
-            tok |= com.str.contains(t, case=False, na=False, regex=False)  # ← 正式API
+            tok |= com.str.contains(t, case=False, na=False, regex=False)
         kw_mask = tok
 
 mask = pd.Series([True] * len(_df))
@@ -571,26 +626,23 @@ view = _df.loc[mask].copy()
 view = view.sort_values("dt_local", ascending=False, na_position="last")
 
 # --------------------------------------------
-# バッジ付与 / 表示列の構築
+# バッジ付与 / 列構築
 # --------------------------------------------
 view["pred_vol_badge"] = view["pred_vol"].map(lambda v: grade_with_emoji(v, vol_hi, vol_mid, positive_good=False))
 view["fake_rate_badge"] = view["fake_rate"].map(lambda v: grade_with_emoji(v, fake_hi, fake_mid, positive_good=False))
 view["confidence_badge"] = view["confidence"].map(lambda v: grade_with_emoji(v, conf_hi, conf_mid, positive_good=True))
 view["rec_emoji"] = view.apply(lambda r: pick_rec_emoji(r.get("rec_action"), r.get("fake_rate"), r.get("confidence")), axis=1)
 
-# ★ UFuncNoLoopError 対策：文字列連結は str.cat を使う
 view["rec_action"] = view["rec_action"].fillna("").astype(str)
 view["rec_emoji"]  = view["rec_emoji"].fillna("").astype(str)
 view["rec_display"] = view["rec_emoji"].str.cat(view["rec_action"], sep=" ").str.strip()
 
-# 数値域の安全化（0〜1にクリップ）
 for col in ["pred_vol", "fake_rate", "confidence"]:
     view[col] = view[col].map(
         lambda x: None if (x is None or (isinstance(x, float) and math.isnan(x)))
         else max(0.0, min(1.0, float(x)))
     )
 
-# 欲しい列順（固定）
 show_cols = [
     "date_local", "time_band", "sector", "size",
     "pred_vol_badge", "fake_rate_badge", "confidence_badge",
@@ -617,9 +669,8 @@ with right:
         """
     )
 
-# 一言統計 + エンドポイント情報
 st.write(f"**{len(view)}** 行 — Base: `{base_url}` — 表示範囲: {lookback_h}h — n={n}")
-st.caption(f"Endpoint: {endpoint_used}　Payload: {payload_shape}")
+st.caption(f"Endpoint: {st.session_state.get('endpoint_used', '?')}　Payload: {st.session_state.get('payload_shape', '?')}")
 
 # --------------------------------------------
 # 出力テーブル
