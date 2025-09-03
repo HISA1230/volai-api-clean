@@ -1,6 +1,6 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
-Streamlit UI — 見栄え仕上げ v1（互換ブリッジ & 柔軟ペイロード対応）
+Streamlit UI ? 見栄え仕上げ v1（互換ブリッジ & 柔軟ペイロード対応）
 - 固定列: 日付(ローカル) / 時間帯 / セクター / サイズ / 予測ボラ / だまし率 / 信頼度 / コメント / 推奨
 - 絵文字バッジ & フィルタ付き
 - /api/predict/latest が 404 の場合は /api/strategy/latest にフォールバック
@@ -22,8 +22,8 @@ import streamlit as st
 # ページ設定
 # --------------------------------------------
 st.set_page_config(
-    page_title="Volatility AI — Predict View",
-    page_icon="📈",
+    page_title="Volatility AI ? Predict View",
+    page_icon="??",
     layout="wide",
 )
 
@@ -31,7 +31,7 @@ st.set_page_config(
 # ユーティリティ
 # --------------------------------------------
 def _parse_num(x: Any) -> Optional[float]:
-    """'0.62 🟢' のような文字から数値を抽出"""
+    """'0.62 ??' のような文字から数値を抽出"""
     if x is None:
         return None
     if isinstance(x, (int, float)):
@@ -148,13 +148,17 @@ def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
 
     st.session_state["endpoint_used"] = used
 
-    # ==== ペイロードから DataFrame を返す（必ず何かを返す設計） ====
+    # ==== ここから「常に DataFrame を返す」堅牢化（直すところ①） ====
     data = _extract_listlike(payload) or []
     st.session_state["payload_shape"] = f"{type(payload).__name__} -> list[{len(data)}]"
 
     df = pd.DataFrame(data)
     # 旧形式なら新形式へマッピング
     df = _compat_bridge(df)
+
+    # 空でも DataFrame を返す（None は返さない）
+    if df.empty:
+        return df
 
     # 欠損カラムを補完
     for col in [
@@ -179,10 +183,7 @@ def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
         except Exception:
             return str(ts)
 
-    if "ts_utc" in df.columns:
-        df["date_local"] = df["ts_utc"].map(to_local)
-    else:
-        df["date_local"] = ""
+    df["date_local"] = df["ts_utc"].map(to_local)
 
     # symbols が配列ならカンマ区切り文字列に
     def norm_symbols(v: Any) -> str:
@@ -214,46 +215,46 @@ def fetch_predict_latest(base: str, n: int = 200) -> pd.DataFrame:
 
 
 def grade_with_emoji(value: Optional[float], hi: float, mid: float, *, positive_good: bool) -> str:
-    """絵文字バッジを返す（positive_good=True は高いほど良い）。表示は 0–1 または % をトグルで切替。"""
+    """絵文字バッジを返す（positive_good=True は高いほど良い）。表示は 0?1 または % をトグルで切替。"""
     if value is None or (isinstance(value, float) and math.isnan(value)):
-        return "▫️ N/A"
+        return "?? N/A"
     # 表示フォーマット
     if 'USE_PERCENT_BADGE' in globals() and USE_PERCENT_BADGE:
         disp = f"{value*100:.1f}%"
     else:
         disp = f"{value:.2f}"
     if positive_good:
-        if value >= hi:   return f"🟢 {disp}"
-        elif value >= mid:return f"🟠 {disp}"
-        else:             return f"⚪ {disp}"
+        if value >= hi:   return f"?? {disp}"
+        elif value >= mid:return f"?? {disp}"
+        else:             return f"? {disp}"
     else:
-        if value >= hi:   return f"🔴 {disp}"
-        elif value >= mid:return f"🟠 {disp}"
-        else:             return f"🟢 {disp}"
+        if value >= hi:   return f"?? {disp}"
+        elif value >= mid:return f"?? {disp}"
+        else:             return f"?? {disp}"
 
 
 def pick_rec_emoji(action: Any, fake_rate: Optional[float], conf: Optional[float]) -> str:
     s = str(action or "").lower()
     if any(k in s for k in ["buy", "long", "enter", "go long"]):
-        return "🟢📈"
+        return "????"
     if any(k in s for k in ["short", "sell", "take profit"]):
-        return "🔻"
+        return "??"
     if any(k in s for k in ["avoid", "skip", "no trade"]):
-        return "⛔"
+        return "?"
     if any(k in s for k in ["watch", "hold", "wait"]):
-        return "👀"
+        return "??"
     if conf and conf >= 0.7 and (fake_rate is None or fake_rate < 0.3):
-        return "✅"
+        return "?"
     if fake_rate and fake_rate >= 0.6:
-        return "⚠️"
-    return "🔎"
+        return "??"
+    return "??"
 
 
 # --------------------------------------------
 # サイドバー（設定）
 # --------------------------------------------
 with st.sidebar:
-    st.header("⚙️ 設定")
+    st.header("?? 設定")
 
     default_base = os.getenv("VOLAI_API_BASE", "http://127.0.0.1:8021")
     base_url = st.text_input("API Base URL", value=default_base, help="例: http://127.0.0.1:8021")
@@ -265,13 +266,13 @@ with st.sidebar:
     st.caption("しきい値（バックエンドと揃える）")
     col1, col2 = st.columns(2)
     with col1:
-        vol_hi  = st.number_input("予測ボラ: High ≥", value=0.70, min_value=0.0, max_value=1.0, step=0.05)
-        vol_mid = st.number_input("予測ボラ: Mid ≥",  value=0.40, min_value=0.0, max_value=1.0, step=0.05)
-        fake_hi = st.number_input("だまし率: High ≥", value=0.60, min_value=0.0, max_value=1.0, step=0.05)
-        fake_mid= st.number_input("だまし率: Mid ≥",  value=0.30, min_value=0.0, max_value=1.0, step=0.05)
+        vol_hi  = st.number_input("予測ボラ: High ?", value=0.70, min_value=0.0, max_value=1.0, step=0.05)
+        vol_mid = st.number_input("予測ボラ: Mid ?",  value=0.40, min_value=0.0, max_value=1.0, step=0.05)
+        fake_hi = st.number_input("だまし率: High ?", value=0.60, min_value=0.0, max_value=1.0, step=0.05)
+        fake_mid= st.number_input("だまし率: Mid ?",  value=0.30, min_value=0.0, max_value=1.0, step=0.05)
     with col2:
-        conf_hi = st.number_input("信頼度: High ≥",  value=0.70, min_value=0.0, max_value=1.0, step=0.05)
-        conf_mid= st.number_input("信頼度: Mid ≥",   value=0.40, min_value=0.0, max_value=1.0, step=0.05)
+        conf_hi = st.number_input("信頼度: High ?",  value=0.70, min_value=0.0, max_value=1.0, step=0.05)
+        conf_mid= st.number_input("信頼度: Mid ?",   value=0.40, min_value=0.0, max_value=1.0, step=0.05)
 
         # --- プリセットの初期値（スライダーより前に定義！） ---
         if "min_conf" not in st.session_state: st.session_state["min_conf"] = 0.0
@@ -282,7 +283,7 @@ with st.sidebar:
             "一発設定（あとから手動で微調整OK）",
             ["手動", "保守的（厳選）", "バランス（標準）", "探索（広め）"],
             index=0, horizontal=True,
-            help="保守: CONF≥0.70 & FAKE≤0.30 ／ バランス: 0.60/0.40 ／ 探索: 0.50/0.60",
+            help="保守: CONF?0.70 & FAKE?0.30 ／ バランス: 0.60/0.40 ／ 探索: 0.50/0.60",
         )
         PRESETS = {
             "保守的（厳選）": {"min_conf": 0.70, "max_fake": 0.30},
@@ -294,13 +295,13 @@ with st.sidebar:
             if (st.session_state["min_conf"], st.session_state["max_fake"]) != (tgt["min_conf"], tgt["max_fake"]):
                 st.session_state["min_conf"] = tgt["min_conf"]
                 st.session_state["max_fake"] = tgt["max_fake"]
-                st.toast(f"プリセット「{preset}」適用：信頼度≥{tgt['min_conf']} / だまし率≤{tgt['max_fake']}")
+                st.toast(f"プリセット「{preset}」適用：信頼度?{tgt['min_conf']} / だまし率?{tgt['max_fake']}")
                 st.rerun()
 
     # リセットボタン（横幅を占有しないよう列でラップ）
     t1, _ = st.columns([1.9, 8])
     with t1:
-        if st.button("🔁 全表示にリセット", use_container_width=True):
+        if st.button("?? 全表示にリセット", use_container_width=True):
             st.session_state["min_conf"] = 0.0
             st.session_state["max_fake"] = 1.0
             st.rerun()
@@ -352,7 +353,7 @@ with st.sidebar:
             small_max_m = new_small_max
 
         st.caption(
-            f"分類レンジ:  Large ≥ {large_min_b:.2f}B ｜ "
+            f"分類レンジ:  Large ? {large_min_b:.2f}B ｜ "
             f"Mid [{mid_min_b:.2f}B, {mid_max_b:.2f}B) ｜ "
             f"Small [{small_min_m:.0f}M, {small_max_m:.0f}M) ｜ "
             f"Micro < {small_min_m:.0f}M"
@@ -378,12 +379,12 @@ with st.sidebar:
 
     # 数値の表示形式
     st.markdown("---")
-    disp_mode = st.radio("数値表示", ["0–1", "%"], index=0, horizontal=True)
+    disp_mode = st.radio("数値表示", ["0?1", "%"], index=0, horizontal=True)
     USE_PERCENT_BADGE = (disp_mode == "%")
 
     # リフレッシュ
     st.markdown("---")
-    refresh = st.button("🔄 再取得 / Refresh", use_container_width=True)
+    refresh = st.button("?? 再取得 / Refresh", use_container_width=True)
 
 # --------------------------------------------
 # データ取得
@@ -397,9 +398,9 @@ except Exception as e:
     err_box.error(f"{e}\n\n・APIが起動し `/health` が 200 か確認してください\n・`base_url` が正しいか確認してください")
     st.stop()
 
-# ==== None ガード（念のため） ====
+# ==== None ガード（直すところ②） ====
 if df_raw is None:
-    err_box.error("APIレスポンスの解釈に失敗しました（df_raw=None）。サイドバーの『再取得』、またはページの Rerun を試してください。")
+    err_box.error("API応答の解析に失敗しました（df_raw=None）。もう一度『再取得』、またはページを Rerun してください。")
     st.stop()
 
 # 空なら終了
@@ -518,10 +519,10 @@ with fcol3:
 with fcol4:
     kw = st.text_input("キーワード（symbols, comment 部分一致）", value="")
 
-# クイック操作（横並び）— 厳選ボタンは廃止、リセットのみ
+# クイック操作（横並び）? 厳選ボタンは廃止、リセットのみ
 t1, _ = st.columns([1.8, 8])
 with t1:
-    if st.button("🔁 全表示にリセット", use_container_width=True):
+    if st.button("?? 全表示にリセット", use_container_width=True):
         st.session_state["min_conf"] = 0.0
         st.session_state["max_fake"] = 1.0
         st.rerun()
@@ -550,7 +551,8 @@ if kw:
         tok = pd.Series(False, index=_df.index)
         for t in tokens:
             tok |= sym.str.contains(t, case=False, na=False, regex=False)
-            tok |= com.str.contains(t, case=False, na=False, regex=False)  # ← 正式API
+            # ==== str_contains → str.contains に修正（直すところ③） ====
+            tok |= com.str.contains(t, case=False, na=False, regex=False)
         kw_mask = tok
 
 mask = pd.Series([True] * len(_df))
@@ -577,13 +579,11 @@ view["pred_vol_badge"] = view["pred_vol"].map(lambda v: grade_with_emoji(v, vol_
 view["fake_rate_badge"] = view["fake_rate"].map(lambda v: grade_with_emoji(v, fake_hi, fake_mid, positive_good=False))
 view["confidence_badge"] = view["confidence"].map(lambda v: grade_with_emoji(v, conf_hi, conf_mid, positive_good=True))
 view["rec_emoji"] = view.apply(lambda r: pick_rec_emoji(r.get("rec_action"), r.get("fake_rate"), r.get("confidence")), axis=1)
-
-# ★ UFuncNoLoopError 対策：文字列連結は str.cat を使う
 view["rec_action"] = view["rec_action"].fillna("").astype(str)
 view["rec_emoji"]  = view["rec_emoji"].fillna("").astype(str)
 view["rec_display"] = view["rec_emoji"].str.cat(view["rec_action"], sep=" ").str.strip()
 
-# 数値域の安全化（0〜1にクリップ）
+# 数値域の安全化（0?1にクリップ）
 for col in ["pred_vol", "fake_rate", "confidence"]:
     view[col] = view[col].map(
         lambda x: None if (x is None or (isinstance(x, float) and math.isnan(x)))
@@ -605,20 +605,20 @@ for c in show_cols:
 # --------------------------------------------
 left, right = st.columns([3, 2])
 with left:
-    st.subheader("📊 予測サマリー")
-    st.caption("絵文字: VOL/FAKE は高いほど🔴注意、CONF は高いほど🟢良い")
+    st.subheader("?? 予測サマリー")
+    st.caption("絵文字: VOL/FAKE は高いほど??注意、CONF は高いほど??良い")
 with right:
     st.markdown(
         """
         ### 凡例
-        **予測ボラ（VOL）**：🟢低 / 🟠中 / 🔴高  
-        **だまし率（FAKE）**：🟢低 / 🟠中 / 🔴高  
-        **信頼度（CONF）**：🟢高 / 🟠中 / ⚪低
+        **予測ボラ（VOL）**：??低 / ??中 / ??高  
+        **だまし率（FAKE）**：??低 / ??中 / ??高  
+        **信頼度（CONF）**：??高 / ??中 / ?低
         """
     )
 
 # 一言統計 + エンドポイント情報
-st.write(f"**{len(view)}** 行 — Base: `{base_url}` — 表示範囲: {lookback_h}h — n={n}")
+st.write(f"**{len(view)}** 行 ? Base: `{base_url}` ? 表示範囲: {lookback_h}h ? n={n}")
 st.caption(f"Endpoint: {endpoint_used}　Payload: {payload_shape}")
 
 # --------------------------------------------
@@ -633,9 +633,9 @@ st.dataframe(
         "time_band": st.column_config.TextColumn("時間帯", width="small"),
         "sector": st.column_config.TextColumn("セクター", width="small"),
         "size": st.column_config.TextColumn("サイズ", width="small"),
-        "pred_vol_badge": st.column_config.TextColumn("予測ボラ", help="0〜1（高いほどボラ大・注意）", width="small"),
-        "fake_rate_badge": st.column_config.TextColumn("だまし率", help="0〜1（高いほどダマシ懸念）", width="small"),
-        "confidence_badge": st.column_config.TextColumn("信頼度", help="0〜1（高いほど良い）", width="small"),
+        "pred_vol_badge": st.column_config.TextColumn("予測ボラ", help="0?1（高いほどボラ大・注意）", width="small"),
+        "fake_rate_badge": st.column_config.TextColumn("だまし率", help="0?1（高いほどダマシ懸念）", width="small"),
+        "confidence_badge": st.column_config.TextColumn("信頼度", help="0?1（高いほど良い）", width="small"),
         "rec_display": st.column_config.TextColumn("推奨", width="small"),
         "comment": st.column_config.TextColumn("コメント", width="large"),
         "symbols": st.column_config.TextColumn("銘柄", width="medium"),
@@ -652,7 +652,7 @@ csv = view[[
     "comment", "rec_action", "symbols",
 ]].to_csv(index=False)
 st.download_button(
-    label="⬇️ CSV ダウンロード",
+    label="?? CSV ダウンロード",
     data=csv,
     file_name=f"predict_view_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
     mime="text/csv",

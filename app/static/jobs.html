@@ -1,0 +1,257 @@
+﻿<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>VolAI 運用コンソール</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#222;margin:24px}
+    h1{font-size:20px;margin:0 0 12px}
+    .card{border:1px solid #eee;border-radius:10px;padding:16px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    label{display:inline-block;min-width:90px}
+    input{padding:6px 8px;border:1px solid #ccc;border-radius:6px}
+    button{padding:8px 12px;border:1px solid #ccc;border-radius:8px;background:#fafafa;cursor:pointer}
+    button:hover{background:#f0f0f0}
+    code{background:#f7f7f7;padding:2px 6px;border-radius:6px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+    .muted{color:#666}
+    #log{white-space:pre-wrap;background:#0b1020;color:#d7e3ff;padding:12px;border-radius:10px;min-height:120px}
+    .ok{color:#0a7f2e}
+    .err{color:#b00020}
+    table{border-collapse:collapse}
+    th,td{border:1px solid #ddd;padding:6px 8px}
+    small.mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
+  </style>
+</head>
+<body>
+  <h1>VolAI 運用コンソール</h1>
+
+  <div class="card">
+    <div class="row"><strong>API</strong> <code>/ops/jobs</code> / <code>/ops/metrics</code> / <code>/ops/tail/*</code></div>
+    <div class="row">
+      <button onclick="refreshJobs()">ジョブ一覧を読み込み</button>
+      <button onclick="refreshMetrics()">メトリクス更新</button>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <!-- ジョブ一覧が入る -->
+    <div id="jobs"></div>
+
+    <!-- カウント表示 -->
+    <div class="row">
+      <table>
+        <thead><tr><th>テーブル</th><th>件数</th></tr></thead>
+        <tbody id="metrics">
+          <tr><td>macro_daily</td><td>-</td></tr>
+          <tr><td>news_sentiment</td><td>-</td></tr>
+          <tr><td>supply_demand</td><td>-</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 表示ポリシーの説明 -->
+  <div class="card">
+    <div class="row"><strong>時刻表示の方針</strong></div>
+    <div class="row" style="align-items:flex-start">
+      <div class="muted">
+        <div>・バックエンドは <strong>ISO 8601（UTC）</strong> で保持（例：<span class="mono">2025-08-29T03:00:00Z</span>）。</div>
+        <div>・UI は <strong>Intl.DateTimeFormat（ja-JP, 24時間, 秒まで）</strong> でローカルに固定表示。</div>
+        <div>・セルの <em>title</em>（ホバー）で元の UTC/ISO を確認できます。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 最近のニュースセンチメント表示 -->
+  <div class="card">
+    <div class="row"><strong>最近のニュースセンチメント</strong></div>
+    <div class="row">
+      <label>表示件数</label>
+      <input type="number" id="ns_tail_n" value="20" min="1" max="200" />
+      <button onclick="fetchNewsTail()">表示</button>
+    </div>
+    <div id="ns_tail_table" class="row"></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><strong>実行ログ</strong></div>
+    <div id="log">ready.</div>
+  </div>
+
+  <script>
+    const apiBase = ""; // 同一オリジン
+
+    // ISO(UTC) -> ローカル固定表示（ja-JP, 24h, 秒まで）+ titleにUTC ISO
+    const fmt = s => {
+      if (!s) return { text: "", title: "" };
+      const d = new Date(s);
+      const text = new Intl.DateTimeFormat('ja-JP', {
+        year:'numeric', month:'2-digit', day:'2-digit',
+        hour:'2-digit', minute:'2-digit', second:'2-digit',
+        hour12:false
+      }).format(d);                 // 例: 2025/08/29 12:34:56
+      const title = new Date(d.getTime()).toISOString(); // 例: 2025-08-29T03:00:00.000Z
+      return { text, title };
+    };
+
+    function log(msg, cls="") {
+      const el = document.getElementById("log");
+      const t = new Date().toLocaleTimeString();
+      el.textContent += `\n[${t}] ${msg}`;
+      if (cls) el.className = cls;
+    }
+
+    function setStatus(text, isErr=false){
+      const el = document.getElementById("status");
+      el.textContent = text;
+      el.className = isErr ? "err" : "muted";
+    }
+
+    async function refreshJobs(){
+      setStatus("ジョブを読み込み中…");
+      try{
+        const r = await fetch(`${apiBase}/ops/jobs/`);
+        const data = await r.json();
+        renderJobs(data.jobs || []);
+        setStatus("ジョブ読み込み完了 ✓");
+      }catch(e){
+        setStatus("ジョブ読み込み失敗", true);
+        log(`ERROR: ${e}`, "err");
+      }
+    }
+
+    function renderJobs(jobs){
+      const wrap = document.getElementById("jobs");
+      if (!jobs.length){ wrap.innerHTML = "<div class='muted'>ジョブなし</div>"; return; }
+      wrap.innerHTML = `
+        <div class="card">
+          <div><strong>macro_ingest</strong></div>
+          <div class="row">
+            <label>期間（from）</label><input type="date" id="mi_from" />
+            <label>期間（to）</label><input type="date" id="mi_to" />
+            <button onclick="runMacro()">実行</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div><strong>news_sentiment</strong></div>
+          <div class="row">
+            <label>窓（時間）</label><input type="number" id="ns_win" value="6" min="1" />
+            <button onclick="runNews()">実行</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div><strong>supply_demand</strong></div>
+          <div class="row">
+            <label>日付</label><input type="date" id="sd_day" />
+            <button onclick="runSD()">実行</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function refreshMetrics(){
+      try{
+        const r = await fetch(`${apiBase}/ops/metrics`);
+        const m = await r.json();
+        const tbody = document.getElementById("metrics");
+        tbody.innerHTML = ["macro_daily","news_sentiment","supply_demand"]
+          .map(k => `<tr><td>${k}</td><td>${m[k]}</td></tr>`).join("");
+        log("メトリクスを更新しました", "ok");
+      }catch(e){
+        log(`metrics error: ${e}`, "err");
+      }
+    }
+
+    async function runMacro(){
+      const f = document.getElementById("mi_from").value;
+      const t = document.getElementById("mi_to").value;
+      const qs = new URLSearchParams({ name: "macro_ingest" });
+      if (f) qs.append("from", f);
+      if (t) qs.append("to", t);
+      await postRun(qs);
+    }
+
+    async function runNews(){
+      const w = document.getElementById("ns_win").value || "6";
+      const qs = new URLSearchParams({ name: "news_sentiment", window_hours: w });
+      await postRun(qs);
+    }
+
+    async function runSD(){
+      const d = document.getElementById("sd_day").value;
+      const qs = new URLSearchParams({ name: "supply_demand" });
+      if (d) qs.append("day", d);
+      await postRun(qs);
+    }
+
+    async function postRun(qs){
+      try{
+        const r = await fetch(`${apiBase}/ops/jobs/run?${qs.toString()}`, { method: "POST" });
+        const data = await r.json();
+        log(JSON.stringify(data));
+        await refreshMetrics();
+      }catch(e){
+        log(`run error: ${e}`, "err");
+      }
+    }
+
+    // ★ ニュースセンチメント（ts_utcでソート、ts_utcだけローカル表示+titleでUTC ISO）
+    async function fetchNewsTail(){
+      const n = parseInt(document.getElementById("ns_tail_n").value || "20", 10);
+      const url = `${apiBase}/ops/tail/news_sentiment?n=${Math.min(Math.max(n,1),200)}&order_by=ts_utc`;
+      try{
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        const rows = data.rows || [];
+
+        const host = document.getElementById("ns_tail_table");
+        if (!rows.length){
+          host.innerHTML = "<div class='muted'>データがありません</div>";
+          return;
+        }
+
+        // 表示ラベル（列キーと日本語表記を分離）
+        const columns = [
+          {key:"id",           label:"ID"},
+          {key:"ts_utc",       label:"時刻（ローカル）"},
+          {key:"sector",       label:"セクター"},
+          {key:"window_hours", label:"集計窓［h］"},
+          {key:"avg_score",    label:"平均スコア"},
+          {key:"pos_ratio",    label:"ポジ比率"},
+          {key:"volume",       label:"ボリューム"}
+        ];
+
+        const thead = `<thead><tr>${columns.map(c=>`<th>${c.label}</th>`).join("")}</tr></thead>`;
+        const tbody = `<tbody>${
+          rows.map(row => `<tr>${
+            columns.map(c => {
+              const v = row[c.key];
+              if (c.key === "ts_utc") {
+                const f = fmt(v); // {text, title}
+                return `<td title="${f.title}">${f.text}</td>`;
+              }
+              if (Array.isArray(v)) return `<td>${v.join(", ")}</td>`;
+              return `<td>${v ?? ""}</td>`;
+            }).join("")
+          }</tr>`).join("")
+        }</tbody>`;
+
+        host.innerHTML = `<table>${thead}${tbody}</table>`;
+        log(`news_sentiment を ${rows.length} 行表示`, "ok");
+      }catch(e){
+        document.getElementById("ns_tail_table").innerHTML =
+          `<div class='err'>読み込みに失敗しました: ${e}</div>`;
+        log(`tail error: ${e}`, "err");
+      }
+    }
+
+    // 初期ロード
+    refreshJobs();
+    refreshMetrics();
+    // fetchNewsTail(); // ページ表示直後に自動表示したい場合は有効化
+  </script>
+</body>
+</html>

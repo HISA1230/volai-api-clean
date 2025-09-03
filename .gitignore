@@ -1,6 +1,11 @@
-﻿.env
-tools/.secrets.ps1
+﻿# --- secrets & env ---
+.env
+.env.*        # .env.local 等を使う場合
 !.env.example
+tools/.secrets.ps1
+.streamlit/secrets.toml
+
+# --- venv / cache ---
 venv/
 .venv/
 venv_sys/
@@ -9,15 +14,42 @@ __pycache__/
 .python-version
 .mypy_cache/
 .pytest_cache/
+.tox/
+.nox/
+
+# --- coverage ---
 .coverage
+.coverage.*
+htmlcov/
+
 # --- builds / eggs ---
 build/
 dist/
 *.egg-info/
+pip-wheel-metadata/
 
-# --- editors ---
+# --- editors / OS ---
 .vscode/
+.idea/
 .DS_Store
+Thumbs.db
 
-# --- generated files (必要なら) ---
-models/shap_summary.csv
+# --- data / db (local only) ---
+*.sqlite
+*.db
+
+# --- logs ---
+*.log
+logs/
+
+# --- generated models & SHAP (必要なら広めに) ---
+models/*.pkl
+models/shap_values.pkl
+models/*_shap_summary.csv
+models/*shap*.csv
+
+# --- notebooks ---
+.ipynb_checkpoints/
+
+# --- node (UIを同repoに置く場合) ---
+node_modules/

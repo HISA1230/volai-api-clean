@@ -1,0 +1,42 @@
+﻿param(
+  [string]$Base = "http://127.0.0.1:8022",
+  [int]$WindowHours = 24
+)
+
+$dt = (Get-Date).ToUniversalTime().ToString("yyyyMMdd")
+$logDir = "C:\ProgramData\VolAI\logs"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$log = Join-Path $logDir "ops_run_$dt.log"
+
+function writeln($s){
+  ("[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $s) | Tee-Object -FilePath $log -Append
+}
+
+try{
+  writeln "BEGIN Base=$Base WindowHours=$WindowHours PID=$PID"
+
+  writeln "Ping $Base/health"
+  $h = Invoke-RestMethod "$Base/health" -TimeoutSec 5
+  if(-not $h.status){ throw "HEALTH NG" }
+  writeln "HEALTH OK:"
+
+  writeln "POST $Base/scheduler/run"
+  $body = @{ mae_threshold=0.2; min_new_labels=5; top_k=100; auto_promote=$true; note="ops_run" } | ConvertTo-Json
+  $r = Invoke-RestMethod -Method POST "$Base/scheduler/run" -ContentType "application/json" -Body $body
+
+  writeln "GET  $Base/api/strategy/latest"
+  $s = Invoke-RestMethod "$Base/api/strategy/latest"
+
+  #  ここを修正：配列ではなく $s.rows の先頭を見る
+  if ($s -and $s.rows -and $s.rows.Count -gt 0) {
+    $ts = $s.rows[0].ts_utc
+    writeln "strategy latest ts=$ts"
+  } else {
+    writeln "strategy latest: NO ROWS"
+  }
+
+  writeln "END OK"
+}
+catch{
+  writeln ("ERROR: " + $_.Exception.Message)
+}
