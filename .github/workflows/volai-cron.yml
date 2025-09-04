@@ -14,32 +14,31 @@ jobs:
       API_LOGIN_PASSWORD: ${{ secrets.API_LOGIN_PASSWORD }}
 
     steps:
-      - name: Show target
+      - name: Check inputs
         run: |
-          echo "API_BASE=$API_BASE"
+          echo "API_BASE=${API_BASE}"
+          test -n "$API_BASE" || (echo "API_BASE is empty" && exit 1)
+          test -n "$API_LOGIN_EMAIL" || (echo "API_LOGIN_EMAIL is empty" && exit 1)
+          test -n "$API_LOGIN_PASSWORD" || (echo "API_LOGIN_PASSWORD is empty" && exit 1)
 
       - name: Get JWT
         id: login
         shell: bash
         run: |
-          set -e
-          TOK=$(curl -sS -X POST "$API_BASE/login" \
-            -H 'Content-Type: application/json' \
-            -d "{\"email\":\"$API_LOGIN_EMAIL\",\"password\":\"$API_LOGIN_PASSWORD\"}" \
-            | python3 - <<'PY'
-import sys, json
-print(json.load(sys.stdin)["access_token"])
-PY
-          )
+          set -euo pipefail
+          RESP=$(curl -sS -X POST "$API_BASE/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"$API_LOGIN_EMAIL\",\"password\":\"$API_LOGIN_PASSWORD\"}")
+          TOK=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))")
           if [ -z "$TOK" ]; then
-            echo "No token returned"; exit 1
+            echo "Failed to get token"; echo "$RESP"; exit 1
           fi
-          echo "token=${TOK}" >> $GITHUB_OUTPUT
+          echo "token=$TOK" >> "$GITHUB_OUTPUT"
 
       - name: POST /scheduler/run
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           curl -sS -X POST "$API_BASE/scheduler/run" \
             -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
             -H "Content-Length: 0" \
@@ -48,7 +47,7 @@ PY
       - name: GET /scheduler/status
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           curl -sS "$API_BASE/scheduler/status" \
             -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
             -w "\nHTTP %{http_code}\n"
