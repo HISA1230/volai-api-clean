@@ -87,6 +87,8 @@ try_include("routers.strategy_router") or try_include("app.routers.strategy_rout
 try_include("routers.scheduler_router") or try_include("app.routers.scheduler_router")
 # ops-jobs（本番で欲しいやつ）
 try_include("routers.ops_jobs_router") or try_include("app.routers.ops_jobs_router")
+# どちらの配置でも拾えるように両方トライ（本番はいま app.* を読んでいます）
+try_include("app.routers.ops_jobs_router") or try_include("routers.ops_jobs_router")
 # --- 運用補助 ---
 @app.get("/ops/routes", include_in_schema=False)
 def _ops_routes():
