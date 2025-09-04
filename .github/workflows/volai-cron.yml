@@ -1,53 +1,38 @@
 name: VolAI Cron (call /scheduler/run)
 
 on:
+  workflow_dispatch: {}      # 手動実行ボタン
   schedule:
-    - cron: "*/5 * * * *"   # 5分おき（UTC）
-  workflow_dispatch:        # 手動実行ボタン
+    - cron: "*/5 * * * *"    # 5分おき（UTC）
 
 jobs:
-  run-scheduler:
+  call-scheduler:
     runs-on: ubuntu-latest
-    env:
-      API_BASE: ${{ secrets.API_BASE }}
-      API_LOGIN_EMAIL: ${{ secrets.API_LOGIN_EMAIL }}
-      API_LOGIN_PASSWORD: ${{ secrets.API_LOGIN_PASSWORD }}
 
     steps:
-      - name: Check inputs
-        run: |
-          echo "API_BASE=${API_BASE}"
-          test -n "$API_BASE" || (echo "API_BASE is empty" && exit 1)
-          test -n "$API_LOGIN_EMAIL" || (echo "API_LOGIN_EMAIL is empty" && exit 1)
-          test -n "$API_LOGIN_PASSWORD" || (echo "API_LOGIN_PASSWORD is empty" && exit 1)
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Get JWT
-        id: login
-        shell: bash
+      - name: Call /login and then /scheduler/run
+        env:
+          API_BASE: ${{ secrets.API_BASE }}
+          API_EMAIL: ${{ secrets.API_EMAIL }}
+          API_PASSWORD: ${{ secrets.API_PASSWORD }}
         run: |
-          set -euo pipefail
-          RESP=$(curl -sS -X POST "$API_BASE/login" \
+          set -e
+          echo "API_BASE=$API_BASE"
+          echo "Getting token..."
+          TOKEN=$(curl -s -X POST "$API_BASE/login" \
             -H "Content-Type: application/json" \
-            -d "{\"email\":\"$API_LOGIN_EMAIL\",\"password\":\"$API_LOGIN_PASSWORD\"}")
-          TOK=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))")
-          if [ -z "$TOK" ]; then
-            echo "Failed to get token"; echo "$RESP"; exit 1
+            -d "{\"email\":\"$API_EMAIL\",\"password\":\"$API_PASSWORD\"}" | jq -r '.access_token')
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Login failed"; exit 1
           fi
-          echo "token=$TOK" >> "$GITHUB_OUTPUT"
 
-      - name: POST /scheduler/run
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -sS -X POST "$API_BASE/scheduler/run" \
-            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
-            -H "Content-Length: 0" \
-            -w "\nHTTP %{http_code}\n"
+          echo "Trigger /scheduler/run"
+          curl -s -f -X POST "$API_BASE/scheduler/run" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json"
 
-      - name: GET /scheduler/status
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -sS "$API_BASE/scheduler/status" \
-            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
-            -w "\nHTTP %{http_code}\n"
+          echo "Done"
