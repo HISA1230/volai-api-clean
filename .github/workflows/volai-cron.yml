@@ -1,0 +1,54 @@
+name: VolAI Cron (call /scheduler/run)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # 5分おき（UTC）
+  workflow_dispatch:        # 手動実行ボタン
+
+jobs:
+  run-scheduler:
+    runs-on: ubuntu-latest
+    env:
+      API_BASE: ${{ secrets.API_BASE }}
+      API_LOGIN_EMAIL: ${{ secrets.API_LOGIN_EMAIL }}
+      API_LOGIN_PASSWORD: ${{ secrets.API_LOGIN_PASSWORD }}
+
+    steps:
+      - name: Show target
+        run: |
+          echo "API_BASE=$API_BASE"
+
+      - name: Get JWT
+        id: login
+        shell: bash
+        run: |
+          set -e
+          TOK=$(curl -sS -X POST "$API_BASE/login" \
+            -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$API_LOGIN_EMAIL\",\"password\":\"$API_LOGIN_PASSWORD\"}" \
+            | python3 - <<'PY'
+import sys, json
+print(json.load(sys.stdin)["access_token"])
+PY
+          )
+          if [ -z "$TOK" ]; then
+            echo "No token returned"; exit 1
+          fi
+          echo "token=${TOK}" >> $GITHUB_OUTPUT
+
+      - name: POST /scheduler/run
+        shell: bash
+        run: |
+          set -e
+          curl -sS -X POST "$API_BASE/scheduler/run" \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            -H "Content-Length: 0" \
+            -w "\nHTTP %{http_code}\n"
+
+      - name: GET /scheduler/status
+        shell: bash
+        run: |
+          set -e
+          curl -sS "$API_BASE/scheduler/status" \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            -w "\nHTTP %{http_code}\n"
