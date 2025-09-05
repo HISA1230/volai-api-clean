@@ -1,53 +1,72 @@
-- name: Run news_sentiment job via /ops/jobs/run  (robust w/ retry)
-  env:
-    BASE: ${{ secrets.VOLAI_BASE }}
-    EMAIL: ${{ secrets.VOLAI_EMAIL }}
-    PASSWORD: ${{ secrets.VOLAI_PASSWORD }}
-  run: |
-    set -euo pipefail
+name: VolAI Cron (call /ops/jobs/run)
 
-    # 末尾スラ除去
-    BASE="${BASE%/}"
-    echo "BASE=$BASE"
+on:
+  workflow_dispatch: {}      # 手動実行ボタンを出す
+  schedule:
+    - cron: "*/30 * * * *"   # 30分おき（UTC）。5分おきにしたいなら "*/5 * * * *"
 
-    echo "Health check with retry..."
-    ok=0
-    for i in {1..10}; do
-      code=$(curl -sS -m 10 -L -o /dev/null -w '%{http_code}' "$BASE/health" || true)
-      echo " try #$i: /health => $code"
-      if [ "$code" = "200" ]; then ok=1; break; fi
-      sleep $((i*2))
-    done
-    if [ "$ok" -ne 1 ]; then
-      echo " /health did not reach 200. Last verbose attempt:"
-      curl -v "$BASE/health" || true
-      exit 1
-    fi
+permissions:
+  contents: read
 
-    echo "Login with retry..."
-    TOK=""
-    for i in {1..5}; do
-      RESP=$(curl -sS -m 20 -L -X POST "$BASE/login" \
-        -H "Content-Type: application/json" \
-        -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
-        --retry 5 --retry-delay 2 --retry-all-errors || true)
-      TOK=$(echo "$RESP" | jq -r '.access_token')
-      if [ -n "${TOK:-}" ] && [ "$TOK" != "null" ]; then
-        echo " Token acquired."
-        break
-      fi
-      echo " login retry #$i failed; sleeping..."
-      sleep 3
-    done
-    if [ -z "${TOK:-}" ] || [ "$TOK" = "null" ]; then
-      echo "Login failed (no token)"; exit 1
-    fi
+jobs:
+  run-news-sentiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
-    echo "Run job (retry on network errors)..."
-    curl -sS -f -X POST "$BASE/ops/jobs/run?name=news_sentiment&window_hours=6" \
-      -H "Authorization: Bearer $TOK" \
-      -H "Content-Type: application/json" \
-      --retry 5 --retry-delay 2 --retry-all-errors \
-      | tee /dev/stderr
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-    echo "Done"
+      - name: Run news_sentiment job via /ops/jobs/run  (robust w/ retry)
+        env:
+          BASE: ${{ secrets.VOLAI_BASE }}
+          EMAIL: ${{ secrets.VOLAI_EMAIL }}
+          PASSWORD: ${{ secrets.VOLAI_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          # 末尾スラ除去
+          BASE="${BASE%/}"
+          echo "BASE=$BASE"
+
+          echo "Health check with retry..."
+          ok=0
+          for i in {1..10}; do
+            code=$(curl -sS -m 10 -L -o /dev/null -w '%{http_code}' "$BASE/health" || true)
+            echo " try #$i: /health => $code"
+            if [ "$code" = "200" ]; then ok=1; break; fi
+            sleep $((i*2))
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo " /health did not reach 200. Last verbose attempt:"
+            curl -v "$BASE/health" || true
+            exit 1
+          fi
+
+          echo "Login with retry..."
+          TOK=""
+          for i in {1..5}; do
+            RESP=$(curl -sS -m 20 -L -X POST "$BASE/login" \
+              -H "Content-Type: application/json" \
+              -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
+              --retry 5 --retry-delay 2 --retry-all-errors || true)
+            TOK=$(echo "$RESP" | jq -r '.access_token')
+            if [ -n "${TOK:-}" ] && [ "$TOK" != "null" ]; then
+              echo " Token acquired."
+              break
+            fi
+            echo " login retry #$i failed; sleeping..."
+            sleep 3
+          done
+          if [ -z "${TOK:-}" ] || [ "$TOK" = "null" ]; then
+            echo "Login failed (no token)"; exit 1
+          fi
+
+          echo "Run job (retry on network errors)..."
+          curl -sS -f -X POST "$BASE/ops/jobs/run?name=news_sentiment&window_hours=6" \
+            -H "Authorization: Bearer $TOK" \
+            -H "Content-Type: application/json" \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            | tee /dev/stderr
+
+          echo "Done"
