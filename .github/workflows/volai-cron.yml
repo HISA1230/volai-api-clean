@@ -1,38 +1,37 @@
-name: VolAI Cron (call /scheduler/run)
+name: VolAI Cron (call /ops/jobs/run)
 
 on:
-  workflow_dispatch: {}      # 手動実行ボタン
   schedule:
-    - cron: "*/5 * * * *"    # 5分おき（UTC）
+    # 5分おき（UTC）— 好きな間隔に変えてOK
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}  # 手動実行ボタンも出す
 
 jobs:
-  call-scheduler:
+  run-news-sentiment:
     runs-on: ubuntu-latest
-
     steps:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Call /login and then /scheduler/run
+      - name: Login and run news_sentiment
         env:
-          API_BASE: ${{ secrets.API_BASE }}
-          API_EMAIL: ${{ secrets.API_EMAIL }}
-          API_PASSWORD: ${{ secrets.API_PASSWORD }}
+          BASE: ${{ secrets.VOLAI_BASE }}
+          EMAIL: ${{ secrets.VOLAI_EMAIL }}
+          PASSWORD: ${{ secrets.VOLAI_PASSWORD }}
         run: |
-          set -e
-          echo "API_BASE=$API_BASE"
-          echo "Getting token..."
-          TOKEN=$(curl -s -X POST "$API_BASE/login" \
+          set -euo pipefail
+          echo "Login to $BASE ..."
+          TOK=$(curl -sS -X POST "$BASE/login" \
             -H "Content-Type: application/json" \
-            -d "{\"email\":\"$API_EMAIL\",\"password\":\"$API_PASSWORD\"}" | jq -r '.access_token')
-
-          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
+            | jq -r .access_token)
+          if [ -z "$TOK" ] || [ "$TOK" = "null" ]; then
             echo "Login failed"; exit 1
           fi
+          echo "Token acquired."
 
-          echo "Trigger /scheduler/run"
-          curl -s -f -X POST "$API_BASE/scheduler/run" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Content-Type: application/json"
-
-          echo "Done"
+          echo "Run job: news_sentiment (window_hours=6)"
+          curl -sSf -X POST "$BASE/ops/jobs/run?name=news_sentiment&window_hours=6" \
+            -H "Authorization: Bearer $TOK" \
+            -H "Content-Type: application/json" \
+            | tee /dev/stderr
