@@ -1,16 +1,22 @@
 name: VolAI Cron (call /ops/jobs/run)
 
 on:
+  # 手動実行ボタン
   workflow_dispatch: {}
+
+  # 毎日トロント 20:00 に実行（DST対応：夏/冬で2本）
   schedule:
-    - cron: "0 0 * * *"   # 00:00 UTC = 20:00 EDT
-    - cron: "0 1 * * *"   # 01:00 UTC = 20:00 EST
+    - cron: "0 0 * * *"   # 00:00 UTC = 20:00 EDT（夏時間）
+    - cron: "0 1 * * *"   # 01:00 UTC = 20:00 EST（冬時間）
 
 jobs:
   run-news-sentiment:
+    # mainブランチだけで動かす（任意だが安全）
     if: github.ref == 'refs/heads/main'
+
     runs-on: ubuntu-latest
 
+    # 走り過ぎ防止（同じジョブが重なったら新しい方は待機）
     concurrency:
       group: volai-cron
       cancel-in-progress: false
@@ -18,28 +24,30 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Show times (UTC & Toronto)
+      # 便利ログ：現地/UTCの現在時刻を常に出力（トラブル時の確認用）
+      - name: Log clocks (UTC & Toronto)
         run: |
-          date -u +"UTC     %Y-%m-%d %H:%M:%S"
-          TZ=America/Toronto date +"Toronto %Y-%m-%d %H:%M:%S %Z"
+          echo "UTC:      $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "Toronto:  $(TZ=America/Toronto date '+%Y-%m-%d %H:%M:%S %Z')"
 
-      - name: Time check (run only at 20:00 Toronto)
+      # ★最小パッチ：20:00トロント以外はskip判定を出力（以降のステップは if で制御）
+      - name: Run only at 20:00 Toronto (DST-safe guard)
         id: timecheck
         run: |
-          HOUR=$(TZ=America/Toronto date +%H)
-          echo "Toronto hour=$HOUR"
-          if [ "$HOUR" = "20" ]; then
-            echo "run=1" >> "$GITHUB_OUTPUT"
+          hr="$(TZ=America/Toronto date +%H)"
+          if [ "$hr" = "20" ]; then
+            echo "It's 20:00 in Toronto. Proceed."
+            echo "run=1" >> $GITHUB_OUTPUT
           else
-            echo "run=0" >> "$GITHUB_OUTPUT"
-            echo "Not 20:00 in Toronto. All subsequent steps will be skipped."
+            echo "Not 20:00 in Toronto (hr=$hr). Skip."
+            echo "run=0" >> $GITHUB_OUTPUT
           fi
 
       - name: Install jq
         if: steps.timecheck.outputs.run == '1'
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Run news_sentiment job via /ops/jobs/run  (robust w/ retry)
+      - name: Run news_sentiment via /ops/jobs/run (robust w/ retry)
         if: steps.timecheck.outputs.run == '1'
         env:
           BASE: ${{ secrets.VOLAI_BASE }}
@@ -85,9 +93,41 @@ jobs:
             echo "Login failed (no token)"; exit 1
           fi
 
-          echo "Run job (retry on network errors)..."
+          echo "Run job (news_sentiment, window_hours=24)"
           curl -sS -f -X POST "$BASE/ops/jobs/run?name=news_sentiment&window_hours=24" \
             -H "Authorization: Bearer $TOK" \
+            -H "Content-Type: application/json" \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            | tee /dev/stderr
+
+          # 後続ステップで再利用
+          echo "TOK=$TOK" >> $GITHUB_ENV
+
+      # 追加ジョブ（任意）：前営業日で supply_demand を回す（週末スキップ）
+      - name: Run supply_demand for previous business day (Toronto)
+        if: steps.timecheck.outputs.run == '1'
+        env:
+          BASE: ${{ secrets.VOLAI_BASE }}
+        run: |
+          set -euo pipefail
+          BASE="${BASE%/}"
+
+          # 週末はジョブ自体をスキップ
+          DOW=$(TZ=America/Toronto date +%u)   # 1=Mon ... 7=Sun
+          if [ "$DOW" -ge 6 ]; then
+            echo "Weekend in Toronto, skip supply_demand."; exit 0
+          fi
+
+          # 前営業日（祝日未考慮：月曜→金曜 / 火〜金→前日）
+          if [ "$DOW" -eq 1 ]; then
+            DAY=$(TZ=America/Toronto date -d '3 days ago' +%F)
+          else
+            DAY=$(TZ=America/Toronto date -d 'yesterday' +%F)
+          fi
+          echo "Target business day = $DAY"
+
+          curl -sS -f -X POST "$BASE/ops/jobs/run?name=supply_demand&day=$DAY" \
+            -H "Authorization: Bearer ${{ env.TOK }}" \
             -H "Content-Type: application/json" \
             --retry 5 --retry-delay 2 --retry-all-errors \
             | tee /dev/stderr
