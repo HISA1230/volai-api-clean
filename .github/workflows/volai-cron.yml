@@ -1,7 +1,7 @@
 name: VolAI Cron (call /ops/jobs/run)
 
 on:
-  # ←これが手動実行ボタン（Run workflow）を出すトリガ
+  # 手動実行ボタン
   workflow_dispatch: {}
 
   # 毎日トロント 20:00 に実行（DST対応：夏/冬で2本）
@@ -11,7 +11,7 @@ on:
 
 jobs:
   run-news-sentiment:
-    # mainブランチだけで動かす（任意だが安全）
+    # mainブランチだけで動かす（おすすめ）
     if: github.ref == 'refs/heads/main'
 
     runs-on: ubuntu-latest
@@ -24,6 +24,11 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      - name: Show times (UTC & Toronto)
+        run: |
+          date -u +"UTC     %Y-%m-%d %H:%M:%S"
+          TZ=America/Toronto date +"Toronto %Y-%m-%d %H:%M:%S %Z"
+
       - name: Run only at 20:00 Toronto (DST-safe guard)
         run: |
           if [ "$(TZ=America/Toronto date +%H)" != "20" ]; then
