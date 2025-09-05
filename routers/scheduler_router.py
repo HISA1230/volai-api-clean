@@ -65,6 +65,6 @@ def run_scheduler(body: SchedulerRunIn, current_user = Depends(_get_current_user
 
     return result
 
-@router.get("/status")
+@router.api_route("/status", methods=["GET", "HEAD"])
 def scheduler_status(current_user = Depends(_get_current_user)):
     return {"value": _STATUS_LOG, "auth_mode": AUTH_MODE}
