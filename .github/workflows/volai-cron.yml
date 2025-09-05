@@ -1,37 +1,50 @@
 name: VolAI Cron (call /ops/jobs/run)
 
 on:
+  workflow_dispatch: {}      # 手動実行ボタン
   schedule:
-    # 5分おき（UTC）— 好きな間隔に変えてOK
-    - cron: "*/5 * * * *"
-  workflow_dispatch: {}  # 手動実行ボタンも出す
+    - cron: "*/5 * * * *"    # 5分おき（UTC）
 
 jobs:
-  run-news-sentiment:
+  call-ops-job:
     runs-on: ubuntu-latest
+
     steps:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Login and run news_sentiment
+      - name: Run news_sentiment job via /ops/jobs/run
         env:
           BASE: ${{ secrets.VOLAI_BASE }}
           EMAIL: ${{ secrets.VOLAI_EMAIL }}
           PASSWORD: ${{ secrets.VOLAI_PASSWORD }}
         run: |
           set -euo pipefail
+
+          # 末尾スラッシュ除去（https://.../ → https://...）
+          BASE="${BASE%/}"
+          echo "BASE=$BASE"
+
+          echo "Health check..."
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/health")
+          echo "GET /health => $code"
+
           echo "Login to $BASE ..."
-          TOK=$(curl -sS -X POST "$BASE/login" \
+          RESP=$(curl -sS -f -L -X POST "$BASE/login" \
             -H "Content-Type: application/json" \
-            -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
-            | jq -r .access_token)
-          if [ -z "$TOK" ] || [ "$TOK" = "null" ]; then
-            echo "Login failed"; exit 1
+            -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}")
+          echo "Login HTTP OK"
+
+          TOK=$(echo "$RESP" | jq -r '.access_token')
+          if [ -z "${TOK:-}" ] || [ "$TOK" = "null" ]; then
+            echo "Login failed (no access_token)"; exit 1
           fi
           echo "Token acquired."
 
           echo "Run job: news_sentiment (window_hours=6)"
-          curl -sSf -X POST "$BASE/ops/jobs/run?name=news_sentiment&window_hours=6" \
+          curl -sS -f -X POST "$BASE/ops/jobs/run?name=news_sentiment&window_hours=6" \
             -H "Authorization: Bearer $TOK" \
             -H "Content-Type: application/json" \
             | tee /dev/stderr
+
+          echo "Done"
