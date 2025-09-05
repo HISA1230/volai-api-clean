@@ -1,22 +1,16 @@
 name: VolAI Cron (call /ops/jobs/run)
 
 on:
-  # 手動実行ボタン
   workflow_dispatch: {}
-
-  # 毎日トロント 20:00 に実行（DST対応：夏/冬で2本）
   schedule:
-    - cron: "0 0 * * *"   # 00:00 UTC = 20:00 EDT（夏時間）
-    - cron: "0 1 * * *"   # 01:00 UTC = 20:00 EST（冬時間）
+    - cron: "0 0 * * *"   # 00:00 UTC = 20:00 EDT
+    - cron: "0 1 * * *"   # 01:00 UTC = 20:00 EST
 
 jobs:
   run-news-sentiment:
-    # mainブランチだけで動かす（おすすめ）
     if: github.ref == 'refs/heads/main'
-
     runs-on: ubuntu-latest
 
-    # 走り過ぎ防止（同じジョブが重なったら新しい方は待機）
     concurrency:
       group: volai-cron
       cancel-in-progress: false
@@ -29,15 +23,24 @@ jobs:
           date -u +"UTC     %Y-%m-%d %H:%M:%S"
           TZ=America/Toronto date +"Toronto %Y-%m-%d %H:%M:%S %Z"
 
-      - name: Run only at 20:00 Toronto (DST-safe guard)
+      - name: Time check (run only at 20:00 Toronto)
+        id: timecheck
         run: |
-          if [ "$(TZ=America/Toronto date +%H)" != "20" ]; then
-            echo "Not 20:00 in Toronto. Skip."; exit 0; fi
+          HOUR=$(TZ=America/Toronto date +%H)
+          echo "Toronto hour=$HOUR"
+          if [ "$HOUR" = "20" ]; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=0" >> "$GITHUB_OUTPUT"
+            echo "Not 20:00 in Toronto. All subsequent steps will be skipped."
+          fi
 
       - name: Install jq
+        if: steps.timecheck.outputs.run == '1'
         run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Run news_sentiment job via /ops/jobs/run  (robust w/ retry)
+        if: steps.timecheck.outputs.run == '1'
         env:
           BASE: ${{ secrets.VOLAI_BASE }}
           EMAIL: ${{ secrets.VOLAI_EMAIL }}
