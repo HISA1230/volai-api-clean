@@ -53,3 +53,4 @@ models/*shap*.csv
 
 # --- node (UIを同repoに置く場合) ---
 node_modules/
+routers/predict_router.bak.py
