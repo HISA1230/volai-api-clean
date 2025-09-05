@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 import os, logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -46,6 +46,10 @@ def health():
 def root():
     return {"ok": True, "version": "prod"}
 
+@app.head("/health")
+def health_head():
+    # 本文なし200を返す
+    return Response(status_code=200)
 # --- static (任意) ---
 try:
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
