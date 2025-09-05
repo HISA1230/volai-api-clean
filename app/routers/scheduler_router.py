@@ -12,6 +12,8 @@ def list_jobs_noslash():
         {"name":"news_sentiment","params":["window_hours (int)"]},
         {"name":"supply_demand","params":["date (date)"]},
     ]}
+    
+@router.api_route("/status", methods=["GET", "HEAD"])
 
 @router.get("/")
 def list_jobs_slash():
