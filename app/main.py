@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 import os, logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,9 +26,7 @@ app = FastAPI(
     lifespan=lifespan,
     default_response_class=UTF8JSONResponse,
 )
-@app.api_route("/health", methods=["GET", "HEAD"])
-def health():
-    return {"status": "ok"}
+
 # --- CORS ---
 origins = (os.getenv("CORS_ALLOW_ORIGINS") or "*").split(",")
 app.add_middleware(
@@ -39,7 +37,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- HEAD も許可する /health と / のみ定義（重複禁止） ---
+# --- Health & Root（重複ナシ：GET+HEAD の単一定義） ---
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok"}
@@ -48,19 +46,14 @@ def health():
 def root():
     return {"ok": True, "version": "prod"}
 
-@app.head("/health")
-def health_head():
-    # 本文なし200を返す
-    return Response(status_code=200)
 # --- static (任意) ---
 try:
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
 except Exception:
     pass
 
-# --- ルーター取り込みユーティリティ（1回だけ定義） ---
+# --- ルーター取り込みユーティリティ ---
 def try_include(module_path: str, attr_name: str = "router") -> bool:
-    """module_path から router を import して include_router する小道具"""
     try:
         mod = __import__(module_path, fromlist=[attr_name])
         router = getattr(mod, attr_name)
@@ -83,6 +76,9 @@ for mod in ("routers.scheduler_router", "app.routers.scheduler_router"):
 for mod in ("routers.ops_jobs_router", "app.routers.ops_jobs_router"):
     if try_include(mod): break
 
+# db（新規）
+try_include("routers.db_router") or try_include("app.routers.db_router")
+
 # --- 運用補助 ---
 @app.get("/ops/routes", include_in_schema=False)
 def _ops_routes():
@@ -104,5 +100,5 @@ async def __echo(full_path: str, request: Request):
     return {
         "seen_path": "/" + full_path,
         "query": dict(request.query_params),
-        "host": request.headers.get("host")
+        "host": request.headers.get("host"),
     }
