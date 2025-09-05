@@ -243,13 +243,13 @@ def fetch_news_sentiment(n: int = 200) -> pd.DataFrame:
     return df
 
 # ===== 疎通確認 =====
-@router.get("/", include_in_schema=False)
+@router.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 def root_ping():
-    return {"ok": True, "router": "predict", "file": __file__}
+     return {"ok": True, "router": "predict", "file": __file__}
 
-@router.get("/ping", include_in_schema=False)
+@router.api_route("/ping", methods=["GET", "HEAD"], include_in_schema=False)
 def ping():
-    return {"ok": True, "router": "predict", "file": __file__}
+     return {"ok": True, "router": "predict", "file": __file__}
 
 # ===== 本体 =====
 @router.get("/latest", response_model=List[PredictItem])
