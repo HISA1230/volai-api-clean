@@ -1,7 +1,6 @@
 # app/main.py
 # -*- coding: utf-8 -*-
-import os
-import logging
+import os, logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,13 +37,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-def root():
-    return {"ok": True, "version": "local-dev"}
-
-@app.get("/health")
+# --- HEAD も許可する /health と / のみ定義（重複禁止） ---
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok"}
+
+@app.api_route("/", methods=["GET", "HEAD"])
+def root():
+    return {"ok": True, "version": "prod"}
 
 # --- static (任意) ---
 try:
@@ -52,6 +52,7 @@ try:
 except Exception:
     pass
 
+# --- ルーター取り込みユーティリティ（1回だけ定義） ---
 def try_include(module_path: str, attr_name: str = "router") -> bool:
     """module_path から router を import して include_router する小道具"""
     try:
@@ -64,31 +65,18 @@ def try_include(module_path: str, attr_name: str = "router") -> bool:
         logging.getLogger("uvicorn").warning(f"include failed: {module_path} ({e})")
         return False
 
-# app/main.py（ルーター取り込み部分だけ差分）
-def try_include(module_path: str, attr_name: str = "router") -> bool:
-    try:
-        mod = __import__(module_path, fromlist=[attr_name])
-        router = getattr(mod, attr_name)
-        app.include_router(router)
-        print(f"include ok: {module_path}")
-        return True
-    except Exception as e:
-        logging.getLogger("uvicorn").warning(f"include failed: {module_path} ({e})")
-        return False
+# --- ルーター取り込み（両系統を順に試すが、重複 include はしない） ---
+for mod in ("routers.user_router", "app.routers.user_router"):
+    if try_include(mod): break
+for mod in ("routers.predict_router", "app.routers.predict_router"):
+    if try_include(mod): break
+for mod in ("routers.strategy_router", "app.routers.strategy_router"):
+    if try_include(mod): break
+for mod in ("routers.scheduler_router", "app.routers.scheduler_router"):
+    if try_include(mod): break
+for mod in ("routers.ops_jobs_router", "app.routers.ops_jobs_router"):
+    if try_include(mod): break
 
-# --- ルーター取り込み（両系統を順に試す） ---
-# user
-try_include("routers.user_router") or try_include("app.routers.user_router")
-# predict
-try_include("routers.predict_router") or try_include("app.routers.predict_router")
-# strategy
-try_include("routers.strategy_router") or try_include("app.routers.strategy_router")
-# scheduler
-try_include("routers.scheduler_router") or try_include("app.routers.scheduler_router")
-# ops-jobs（本番で欲しいやつ）
-try_include("routers.ops_jobs_router") or try_include("app.routers.ops_jobs_router")
-# どちらの配置でも拾えるように両方トライ（本番はいま app.* を読んでいます）
-try_include("app.routers.ops_jobs_router") or try_include("routers.ops_jobs_router")
 # --- 運用補助 ---
 @app.get("/ops/routes", include_in_schema=False)
 def _ops_routes():
