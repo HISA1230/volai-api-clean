@@ -3,7 +3,7 @@ name: VolAI Cron (call /ops/jobs/run)
 on:
   workflow_dispatch: {}      # 手動実行ボタンを出す
   schedule:
-    - cron: "*/30 * * * *"   # 30分おき（UTC）。5分おきにしたいなら "*/5 * * * *"
+    - cron: "*/5 * * * *"   # 5分おき（UTC）。30分おきにしたいなら "*/30 * * * *"
 
 permissions:
   contents: read
