@@ -26,7 +26,9 @@ app = FastAPI(
     lifespan=lifespan,
     default_response_class=UTF8JSONResponse,
 )
-
+@app.api_route("/health", methods=["GET", "HEAD"])
+def health():
+    return {"status": "ok"}
 # --- CORS ---
 origins = (os.getenv("CORS_ALLOW_ORIGINS") or "*").split(",")
 app.add_middleware(
