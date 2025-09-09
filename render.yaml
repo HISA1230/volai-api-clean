@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: volai-ui
+    env: docker
+    plan: free
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: API_BASE
+        value: https://volai-api-02.onrender.com
+      - key: API_EMAIL
+        value: test@example.com
+      - key: API_PASSWORD
+        value: test1234
