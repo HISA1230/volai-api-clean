@@ -1,0 +1,6 @@
+﻿[2025-08-31 02:46:47] Ping http://127.0.0.1:8021/health
+[2025-08-31 02:46:47] POST /ops/jobs/run?name=news_sentiment&window_hours=24
+[2025-08-31 02:46:48] predict ok (first ts=2025-08-31T06:00:00Z)
+[2025-08-31 02:47:35] Ping http://127.0.0.1:8021/health
+[2025-08-31 02:47:35] POST /ops/jobs/run?name=news_sentiment&window_hours=24
+[2025-08-31 02:47:35] predict ok (first ts=2025-08-31T06:00:00Z)

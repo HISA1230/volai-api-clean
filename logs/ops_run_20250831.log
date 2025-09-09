@@ -1,0 +1,26 @@
+﻿[2025-08-31 02:53:28] BEGIN Base=http://127.0.0.1:8021 WindowHours=24 PID=52408
+[2025-08-31 02:53:28] Ping http://127.0.0.1:8021/health
+[2025-08-31 02:53:28] POST http://127.0.0.1:8021/ops/jobs/run?name=news_sentiment&window_hours=24
+[2025-08-31 02:53:29] GET  http://127.0.0.1:8021/api/predict/latest?n=1
+[2025-08-31 02:53:30] predict ok (first ts=2025-08-31T06:00:00Z)
+[2025-08-31 02:53:30] END OK
+[2025-08-31 03:24:02] BEGIN Base=http://127.0.0.1:8021 WindowHours=24 PID=71824
+[2025-08-31 03:24:02] Ping http://127.0.0.1:8021/health
+[2025-08-31 03:24:02] POST http://127.0.0.1:8021/ops/jobs/run?name=news_sentiment&window_hours=24
+[2025-08-31 03:24:03] GET  http://127.0.0.1:8021/api/predict/latest?n=1
+[2025-08-31 03:24:03] predict ok (first ts=2025-08-31T07:00:00Z)
+[2025-08-31 03:24:03] END OK
+[2025-08-31 03:29:22] BEGIN Base=http://127.0.0.1:8021 WindowHours=24 PID=69208
+[2025-08-31 03:29:22] Ping http://127.0.0.1:8021/health
+[2025-08-31 03:29:22] POST http://127.0.0.1:8021/ops/jobs/run?name=news_sentiment&window_hours=24
+[2025-08-31 03:29:23] GET  http://127.0.0.1:8021/api/predict/latest?n=1
+[2025-08-31 03:29:23] predict ok (first ts=2025-08-31T07:00:00Z)
+[2025-08-31 03:29:23] END OK
+[2025-08-31 03:29:47] BEGIN Base=http://127.0.0.1:8021 WindowHours=24 PID=62504
+[2025-08-31 03:29:47] Ping http://127.0.0.1:8021/health
+[2025-08-31 03:29:47] POST http://127.0.0.1:8021/ops/jobs/run?name=news_sentiment&window_hours=24
+[2025-08-31 03:29:47] GET  http://127.0.0.1:8021/api/predict/latest?n=1
+[2025-08-31 03:29:48] predict ok (first ts=2025-08-31T07:00:00Z)
+[2025-08-31 03:29:48] END OK
+[2025-08-31 04:53:06] BEGIN Base=http://127.0.0.1:8021 WindowHours=24 PID=71916
+[2025-08-31 04:53:06] Ping http://127.0.0.1:8021/health

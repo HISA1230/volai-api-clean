@@ -1,0 +1,23 @@
+services:
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    image: volai-ui:local
+    container_name: volai-ui
+    ports:
+      - "8502:8502"
+    # ← ここで .env をコンテナへ注入（アプリ内の load_dotenv() が読む）
+    env_file:
+      - ./.env
+    # 念のため明示（PORTが未指定なら Dockerfile の ${PORT:-8502} が効きます）
+    environment:
+      - PORT=8502
+    # （任意）ローカルのファイルを読み取り専用で反映したい場合
+    # volumes:
+    #   - ./streamlit_app.py:/app/streamlit_app.py:ro
+    restart: unless-stopped
+
+    # 👇ローカル編集の即反映が欲しいときだけ有効化（任意）
+    # volumes:
+    #   - ./streamlit_app.py:/app/streamlit_app.py:ro

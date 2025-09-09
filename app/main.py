@@ -67,7 +67,7 @@ def try_include(module_path: str, attr_name: str = "router") -> bool:
 # --- ルーター取り込み（両系統を順に試すが、重複 include はしない） ---
 for mod in ("routers.user_router", "app.routers.user_router"):
     if try_include(mod): break
-for mod in ("routers.predict_router", "app.routers.predict_router"):
+for mod in ("app.routers.predict_router", "routers.predict_router"):
     if try_include(mod): break
 for mod in ("routers.strategy_router", "app.routers.strategy_router"):
     if try_include(mod): break

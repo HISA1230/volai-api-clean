@@ -1,0 +1,49 @@
+# git
+.git
+.gitignore
+
+# venv / caches
+venv/
+.venv/
+venv_sys/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.tox/
+.nox/
+
+# secrets
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+tools/.secrets.ps1
+
+# os / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# builds / wheels
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# logs / data
+logs/
+*.log
+*.sqlite
+*.db
+
+# models / notebooks（UIコンテナに不要なら）
+models/
+.ipynb_checkpoints/
+
+# node（同リポで使う場合）
+node_modules/
+
+# 予備ファイル
+routers/predict_router.bak.py
