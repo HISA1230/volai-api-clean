@@ -47,7 +47,9 @@ else:
 # 基本設定
 # =========================
 load_dotenv()
+SHOW_WEBHOOK_UI = os.getenv("SHOW_WEBHOOK_UI", "1").lower() not in ("0","false","no","off")
 st.set_page_config(page_title="Volatility AI UI", layout="wide")
+
 
 def get_query_params():
     try:
@@ -64,6 +66,29 @@ def get_api_base() -> str:
     return env if env else "http://127.0.0.1:8000"
 
 API = get_api_base()
+def autologin_if_needed():
+    if st.session_state.get("token"):
+        return
+    q = get_query_params()
+    want = (os.getenv("AUTOLOGIN", "0").lower() not in ("0","false","no","off")) \
+           or (str(q.get("autologin", "")).lower() in ("1","true","yes"))
+    if not want:
+        return
+    email = os.getenv("AUTOLOGIN_EMAIL", os.getenv("API_EMAIL", "test@example.com"))
+    password = os.getenv("AUTOLOGIN_PASSWORD", os.getenv("API_PASSWORD", "test1234"))
+    try:
+        try:
+            _ = req("GET","/health", auth=False, timeout=(5,10), retries=1)
+        except Exception:
+            pass
+        data = req("POST","/login", {"email":email,"password":password}, auth=False, timeout=(10,80), retries=1)
+        st.session_state["token"] = data.get("access_token")
+        st.session_state["me"] = req("GET","/me", auth=True, timeout=(5,30))
+        st.toast(f"自動ログイン: {st.session_state['me'].get('email','')}", icon="✅")
+    except Exception as e:
+        st.warning(f"自動ログイン失敗: {e}")
+
+    autologin_if_needed()
 
 # ========== Settings: save/load helpers ==========
 SETTINGS_KEYS = [
@@ -415,6 +440,42 @@ with st.sidebar:
     email = st.text_input("Email", value=default_email)
     password = st.text_input("Password", type="password", value=default_pass)
 
+    # --- 自動ログイン（?autologin=1 で有効、トークンはUIの環境変数から） ---
+    AUTOLOGIN_TOKEN = os.getenv("AUTOLOGIN_TOKEN") or os.getenv("ADMIN_TOKEN")
+
+    def _try_autologin():
+        if st.session_state.get("_autologin_done"):
+            return
+        q = get_query_params()
+        # autologin フラグをクエリから判定
+        flag = False
+        if q:
+            val = q.get("autologin")
+            if isinstance(val, list):
+                flag = ("1" in val) or (True in val)
+            elif isinstance(val, str):
+                flag = (val == "1")
+            elif val is True:
+                flag = True
+        if not flag or not AUTOLOGIN_TOKEN:
+            return
+        try:
+            # API の /auth/magic_login でトークン発行
+            data = req(
+                "POST", "/auth/magic_login",
+                {"token": AUTOLOGIN_TOKEN, "email": email},
+                auth=False, timeout=(5, 20), retries=0
+            )
+            st.session_state["token"] = data.get("access_token")
+            st.session_state["me"] = req("GET", "/me", auth=True, timeout=(5, 20))
+            st.session_state["_autologin_done"] = True
+            st.success("自動ログインしました")
+        except Exception as e:
+            st.session_state["_autologin_done"] = True
+            st.info(f"自動ログイン失敗: {e}")
+
+    _try_autologin()
+    
     cA, cB = st.columns(2)
     if cA.button("ログイン"):
         try:
@@ -456,7 +517,7 @@ with st.sidebar:
     except Exception:
         owners_available = False
     if owners_available and st.session_state.get("token"):
-        st.caption("Owners API は存在（要認証）。取得不可なら実装/権限をご確認ください。")
+        
         try:
             owners_data = req("GET","/owners", auth=True, timeout=(5,20))
             if isinstance(owners_data, list):
@@ -467,55 +528,59 @@ with st.sidebar:
                         if name: api_names.append(str(name))
                 if api_names: owners_selectable = api_names
         except Exception:
-            st.info("APIから取得不可。ローカル候補を表示します。")
+            # APIで取れなかった時は黙ってローカル候補にフォールバック
+            pass
     else:
         st.caption("※サーバ未実装（または404）。ローカル候補から選択できます。")
     st.session_state["owner_pick"] = st.selectbox("オーナー", owners_selectable, index=0)
     
-    st.divider()
-    st.subheader("通知（Webhook）")
-    st.checkbox(
-        "Webhook通知を有効化",
-        key="notify_enable",
-        value=st.session_state.get("notify_enable", False)
-    )
-    st.text_input(
-        "Webhook URL",
-        key="notify_webhook_url",
-        placeholder="https://hooks.slack.com/services/XXXX/YYYY/ZZZZ"
-    )
-    st.text_input(
-        "通知タイトル",
-        key="notify_title",
-        placeholder="VolAI 強シグナル"
-    )
+    # ===== 通知（Webhook）を環境変数で出し分け =====
+    if SHOW_WEBHOOK_UI:
+        st.divider()
+        st.subheader("通知（Webhook）")
 
-    # 接続確認
-    if st.button("テスト通知を送信", key="btn_notify_test"):
-        try:
-            def _send_webhook(url, title, text):
-                import requests
-                payload = {
-                    # Slack 互換
-                    "text": f"*{title}*\n{text}",
-                    # Discord など content しか見ない先にも対応
-                    "content": f"**{title}**\n{text}",
-                }
-                r = requests.post(url, json=payload, timeout=5)
-                r.raise_for_status()
+        st.checkbox(
+            "Webhook通知を有効化",
+            key="notify_enable",
+            value=st.session_state.get("notify_enable", False)
+        )
+        st.text_input(
+            "Webhook URL",
+            key="notify_webhook_url",
+            placeholder="https://discord.com/api/webhooks/...."
+        )
+        st.text_input(
+            "通知タイトル",
+            key="notify_title",
+            placeholder="VolAI 強シグナル"
+        )
 
-            url = st.session_state.get("notify_webhook_url") or ""
-            if url:
-                _send_webhook(
-                    url,
-                    st.session_state.get("notify_title") or "VolAI 強シグナル",
-                    "通知テスト（接続確認）"
-                )
-                st.success("Webhookに送信しました ✅")
-            else:
-                st.warning("Webhook URL を入力してください")
-        except Exception as e:
-            st.error(f"送信失敗: {e}")
+        # 接続確認
+        if st.button("テスト通知を送信", key="btn_notify_test"):
+            try:
+                def _send_webhook(url, title, text):
+                    import requests
+                    payload = {
+                        # Slack 互換
+                        "text": f"*{title}*\n{text}",
+                        # Discord など content しか見ない先にも対応
+                        "content": f"**{title}**\n{text}",
+                    }
+                    r = requests.post(url, json=payload, timeout=5)
+                    r.raise_for_status()
+
+                url = st.session_state.get("notify_webhook_url") or ""
+                if url:
+                    _send_webhook(
+                        url,
+                        st.session_state.get("notify_title") or "VolAI 強シグナル",
+                        "通知テスト（接続確認）"
+                    )
+                    st.success("Webhookに送信しました ✅")
+                else:
+                    st.warning("Webhook URL を入力してください")
+            except Exception as e:
+                st.error(f"送信失敗: {e}")
 # =========================
 # 実行前 UI（フィルタ）＋ 自動更新UI
 # =========================
@@ -1187,12 +1252,18 @@ def send_signal_webhook(stream: str, key: str, df: Optional[pd.DataFrame] = None
     key   : _row_key_from_raw と同じ形式 'SYMBOL|HH:MM'
     df    : 該当行の数値を本文に入れたい場合に渡す（無くても送信可）
     """
-    # 無効なら送らない
+    # === ここから置き換え（先頭のガード強化） ===
+    # UIを隠しているときは送らない（保険）
+    if not SHOW_WEBHOOK_UI:
+        return
+    # 通知OFFなら送らない
     if not st.session_state.get("notify_enable", False):
         return
+    # URL未設定なら送らない
     url = (st.session_state.get("notify_webhook_url") or "").strip()
     if not url:
         return
+    # === ここまで置き換え ===
 
     # 本文の材料
     symbol = key.split("|")[0] if "|" in key else key

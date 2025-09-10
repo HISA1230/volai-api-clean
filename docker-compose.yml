@@ -2,7 +2,7 @@ services:
   ui:
     build:
       context: .
-      dockerfile: Dockerfile.ui
+      dockerfile: Dockerfile
     image: volai-ui:local
     container_name: volai-ui
     ports:
