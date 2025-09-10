@@ -9,11 +9,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-# ルータ & DB の import は app. プレフィックスで統一
-from app.routers.magic_login import router as magic_login_router
-from app.routers.owners import router as owners_router
-from app.db import engine, Base, SessionLocal
-from app import models
+# ===== import を両対応にする（app.配下 / 直下のどちらでも動く） =====
+# routers.magic_login
+try:
+    from app.routers.magic_login import router as magic_login_router
+except Exception:
+    from routers.magic_login import router as magic_login_router  # type: ignore
+
+# routers.owners（無ければスキップ可能）
+try:
+    from app.routers.owners import router as owners_router
+except Exception:
+    try:
+        from routers.owners import router as owners_router  # type: ignore
+    except Exception:
+        owners_router = None  # ルータ無しでも起動できるように
+
+# db / models
+try:
+    from app.db import engine, Base, SessionLocal
+    from app import models
+except Exception:
+    from db import engine, Base, SessionLocal  # type: ignore
+    import models  # type: ignore
 
 
 class UTF8JSONResponse(JSONResponse):
@@ -38,10 +56,11 @@ app = FastAPI(
     default_response_class=UTF8JSONResponse,
 )
 
-# --- ルータ（まず固定のもの） ---
+# --- ルータ登録（必須系）
 app.include_router(magic_login_router)
-app.include_router(owners_router)
-
+# 任意系（存在すれば）
+if owners_router:
+    app.include_router(owners_router)
 
 # --- 起動時：DBテーブル作成 + OWNERS_LIST シード ---
 @app.on_event("startup")
@@ -59,13 +78,10 @@ def _startup_db_seed():
                     db.add(models.Owner(name=n))
             db.commit()
 
-
 # --- CORS ---
 origins_raw = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
 origins = [o.strip() for o in origins_raw.split(",") if o.strip()]
-
-# NOTE: allow_credentials=True と allow_origins=["*"] は併用不可。
-# "*" の場合は credentials を False にし、明示ドメインなら True にする。
+# "*" と credentials の両立不可 → 自動で安全側に
 if origins == ["*"]:
     app.add_middleware(
         CORSMiddleware,
@@ -83,27 +99,22 @@ else:
         allow_headers=["*"],
     )
 
-
-# --- Health & Root（重複ナシ：GET+HEAD の単一定義） ---
+# --- Health & Root ---
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok"}
-
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"ok": True, "version": "prod"}
 
-
 # --- static (任意) ---
 try:
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
 except Exception:
-    # static ディレクトリが無い環境では無視
     pass
 
-
-# --- ルーター取り込みユーティリティ（可変構成のため残す） ---
+# --- 追加ルータの動的取り込み（どちらの配置でもOKに） ---
 def try_include(module_path: str, attr_name: str = "router") -> bool:
     try:
         mod = __import__(module_path, fromlist=[attr_name])
@@ -115,27 +126,19 @@ def try_include(module_path: str, attr_name: str = "router") -> bool:
         logging.getLogger("uvicorn").warning(f"include failed: {module_path} ({e})")
         return False
 
-
-# --- 追加ルーター取り込み（両系統を順に試すが、重複 include はしない） ---
 for mod in ("routers.user_router", "app.routers.user_router"):
-    if try_include(mod):
-        break
+    if try_include(mod): break
 for mod in ("app.routers.predict_router", "routers.predict_router"):
-    if try_include(mod):
-        break
+    if try_include(mod): break
 for mod in ("routers.strategy_router", "app.routers.strategy_router"):
-    if try_include(mod):
-        break
+    if try_include(mod): break
 for mod in ("routers.scheduler_router", "app.routers.scheduler_router"):
-    if try_include(mod):
-        break
+    if try_include(mod): break
 for mod in ("routers.ops_jobs_router", "app.routers.ops_jobs_router"):
-    if try_include(mod):
-        break
+    if try_include(mod): break
 
 # db（新規）
 try_include("routers.db_router") or try_include("app.routers.db_router")
-
 
 # --- 運用補助 ---
 @app.get("/ops/routes", include_in_schema=False)
@@ -144,17 +147,14 @@ def _ops_routes():
     for r in app.router.routes:
         try:
             methods = sorted(list(r.methods)) if hasattr(r, "methods") else []
-            rows.append(
-                {
-                    "path": getattr(r, "path", str(r)),
-                    "name": getattr(r, "name", ""),
-                    "methods": methods,
-                }
-            )
+            rows.append({
+                "path": getattr(r, "path", str(r)),
+                "name": getattr(r, "name", ""),
+                "methods": methods
+            })
         except Exception:
             rows.append({"path": str(r)})
     return rows
-
 
 @app.api_route("/__echo/{full_path:path}", methods=["GET"], include_in_schema=False)
 async def __echo(full_path: str, request: Request):
