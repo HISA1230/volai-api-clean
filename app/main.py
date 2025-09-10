@@ -6,6 +6,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+# 先頭の import 群のどこかに追加
+from app.routers.magic_login import router as magic_login_router
 
 class UTF8JSONResponse(JSONResponse):
     media_type = "application/json; charset=utf-8"
@@ -26,6 +28,7 @@ app = FastAPI(
     lifespan=lifespan,
     default_response_class=UTF8JSONResponse,
 )
+app.include_router(magic_login_router)
 
 # --- CORS ---
 origins = (os.getenv("CORS_ALLOW_ORIGINS") or "*").split(",")
