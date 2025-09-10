@@ -4,12 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+# ★ モジュール単位で両対応 import（シンボル直 import はしない）
 try:
+    import app.models as models
     from app.db import SessionLocal
-    from app.models import UserSetting
 except Exception:
+    import models  # type: ignore
     from db import SessionLocal  # type: ignore
-    from models import UserSetting  # type: ignore
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -27,7 +28,7 @@ class SaveIn(BaseModel):
 
 @router.post("/save")
 def save_setting(payload: SaveIn, db: Session = Depends(get_db)):
-    row = UserSetting(
+    row = models.UserSetting(
         owner=payload.owner or "",
         email=payload.email or "",
         settings=payload.settings,
@@ -41,12 +42,12 @@ def save_setting(payload: SaveIn, db: Session = Depends(get_db)):
 def load_setting(owner: Optional[str] = None,
                  email: Optional[str] = None,
                  db: Session = Depends(get_db)):
-    q = db.query(UserSetting)
+    q = db.query(models.UserSetting)
     if owner:
-        q = q.filter(UserSetting.owner == owner)
+        q = q.filter(models.UserSetting.owner == owner)
     if email:
-        q = q.filter(UserSetting.email == email)
-    row = q.order_by(UserSetting.id.desc()).first()
+        q = q.filter(models.UserSetting.email == email)
+    row = q.order_by(models.UserSetting.id.desc()).first()
     if not row:
         raise HTTPException(status_code=404, detail="not found")
     return {"settings": row.settings, "ts": row.created_at}
