@@ -9,6 +9,8 @@ from datetime import datetime, timezone, timedelta
 from typing import List
 
 from fastapi import FastAPI
+from app.routers.settings import router as settings_router
+from app.db import Base, engine
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -37,6 +39,11 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url=None,
 )
+# 既存:
+# app = FastAPI()
+
+# 追記: settings ルータを有効化
+app.include_router(settings_router)
 
 # --- JSONレスポンスに charset=utf-8 を強制付与 ---
 @app.middleware("http")
