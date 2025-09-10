@@ -804,7 +804,36 @@ with save_c3:
                 st.rerun()
         except Exception as e:
             st.error(f"読込失敗: {e}")
-            
+st.markdown("#### クラウド保存 / 読込（サーバDB）")
+col_c1, col_c2 = st.columns(2)
+
+with col_c1:
+    if st.button("クラウドに保存", key="btn_cloud_save"):
+        try:
+            payload = {
+                "owner": st.session_state.get("owner_pick"),
+                "email": (st.session_state.get("me") or {}).get("email", ""),
+                "settings": collect_settings(),
+            }
+            _ = req("POST", "/settings/save", json_data=payload, auth=False, timeout=15)
+            st.success("サーバに保存しました")
+        except Exception as e:
+            st.error(f"保存失敗: {e}")
+
+with col_c2:
+    if st.button("クラウドから読込", key="btn_cloud_load"):
+        try:
+            owner = st.session_state.get("owner_pick") or ""
+            email = (st.session_state.get("me") or {}).get("email", "")
+            q = f"/settings/load?owner={owner}&email={email}"
+            res = req("GET", q, auth=False, timeout=15)
+            apply_settings(res.get("settings", {}))
+            st.success("サーバから読込みました（UIを再描画します）")
+            try: st.rerun()
+            except Exception: pass
+        except Exception as e:
+            st.error(f"読込失敗: {e}")
+                        
 # --- 共有URL（?cfg=...）: 保存/読込ブロックの直後〜 実行ボタンの手前に追加 ---
 with st.expander("共有URL（?cfg=...）", expanded=False):
     c1, c2 = st.columns([1.2, 2.0])

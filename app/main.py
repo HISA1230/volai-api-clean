@@ -140,6 +140,33 @@ for mod in ("routers.ops_jobs_router", "app.routers.ops_jobs_router"):
 # db（新規）
 try_include("routers.db_router") or try_include("app.routers.db_router")
 
+for mod in ("routers.settings_router", "app.routers.settings_router"):
+    if try_include(mod): break
+    
+# === settings_router 直インクルード（保険） ===
+def _has_settings_routes() -> bool:
+    try:
+        for r in app.router.routes:
+            p = getattr(r, "path", "")
+            if isinstance(p, str) and p.startswith("/settings"):
+                return True
+    except Exception:
+        pass
+    return False
+
+if not _has_settings_routes():
+    try:
+        from app.routers.settings_router import router as _settings_router_direct
+    except Exception:
+        try:
+            from routers.settings_router import router as _settings_router_direct  # type: ignore
+        except Exception:
+            _settings_router_direct = None
+
+    if _settings_router_direct:
+        app.include_router(_settings_router_direct)
+        print("include ok: settings_router (direct fallback)")
+            
 # --- 運用補助 ---
 @app.get("/ops/routes", include_in_schema=False)
 def _ops_routes():
@@ -162,4 +189,13 @@ async def __echo(full_path: str, request: Request):
         "seen_path": "/" + full_path,
         "query": dict(request.query_params),
         "host": request.headers.get("host"),
+    }
+import os
+
+@app.get("/ops/version", include_in_schema=False)
+def _version():
+    return {
+        "app": "volai-api",
+        "git": os.getenv("RENDER_GIT_COMMIT", "")[:8],
+        "build": os.getenv("RENDER_BUILD_ID", ""),
     }

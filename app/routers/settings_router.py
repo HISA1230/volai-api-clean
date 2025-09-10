@@ -1,10 +1,15 @@
+# app/routers/settings_router.py
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db import SessionLocal
-from models import UserSetting
+try:
+    from app.db import SessionLocal
+    from app.models import UserSetting
+except Exception:
+    from db import SessionLocal  # type: ignore
+    from models import UserSetting  # type: ignore
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
