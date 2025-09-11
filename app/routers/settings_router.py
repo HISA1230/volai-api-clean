@@ -1,5 +1,4 @@
 # app/routers/settings_router.py
-# ルータは“橋渡し”のみ。テーブル定義は一切しない。
 from __future__ import annotations
 
 import os
@@ -15,7 +14,6 @@ from sqlalchemy import text, desc
 # =========================
 # 設定
 # =========================
-# DIAG は詳細出力フラグ。ルート登録そのものは DIAG に依存させない。
 DIAG = os.getenv("SETTINGS_DIAG", "0").lower() not in ("0", "false", "no", "off", "")
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -91,11 +89,10 @@ class SaveIn(BaseModel):
     settings: Dict[str, Any]
 
 # =========================
-# 診断/所在 確認系（常時登録）
+# 診断/所在（常時登録）
 # =========================
 @router.get("/__where")
 def __where():
-    """ このルータファイルの実体（__file__）/ DIAG / どの models を使ってるかを返す """
     return {
         "file": __file__,
         "diag": DIAG,
@@ -108,7 +105,6 @@ def __where():
 
 @router.get("/_diag")
 def _diag():
-    """ 内部状態のダンプ。常時ルート登録（本番で叩かないだけ） """
     return {
         "ok": True,
         "env": {"SETTINGS_DIAG": DIAG, "RAW": os.getenv("SETTINGS_DIAG", None)},
@@ -129,7 +125,6 @@ def _peek(
     n: int = Query(5, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """ 直近 n 件を覗く。DIAG=0 のときは中身を返さず 404 にする """
     if not DIAG:
         raise HTTPException(status_code=404, detail="not found")
 
@@ -197,7 +192,6 @@ def save_setting(payload: SaveIn, db: Session = Depends(get_db)):
 
 # =========================
 # 読込（ORM → RAW SQL フォールバック）
-# updated_at → created_at → id の降順
 # =========================
 @router.get("/load")
 def load_setting(
@@ -245,7 +239,7 @@ def load_setting(
         except Exception as e_orm:
             orm_err = e_orm  # RAW にフォールバック
 
-    # 2) RAW SQL フォールバック
+    # 2) RAW
     try:
         conds = []
         params: Dict[str, Any] = {}
