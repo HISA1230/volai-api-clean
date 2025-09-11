@@ -1,22 +1,42 @@
 # app/routers/settings_router.py
 from typing import Optional, Dict, Any
-import os, traceback
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+import os, traceback
 
-# --- 両対応 import（app配下 / 直下）
+# ====== インポート分離（models と DB を独立に解決） ======
+APP_MODELS = None
+ROOT_MODELS = None
+MODELS_SRC = ""
+APP_MODELS_ERR = None
+ROOT_MODELS_ERR = None
+
 try:
-    import app.models as models
-    from app.db import SessionLocal
-except Exception:  # pragma: no cover
-    import models  # type: ignore
+    import app.models as APP_MODELS  # type: ignore
+    MODELS_SRC = "app.models"
+except Exception as e:
+    APP_MODELS_ERR = repr(e)
+
+if APP_MODELS is None:
+    try:
+        import models as ROOT_MODELS  # type: ignore
+        MODELS_SRC = "models"
+    except Exception as e:
+        ROOT_MODELS_ERR = repr(e)
+
+# 実際に使う models
+models = APP_MODELS or ROOT_MODELS
+
+# DB セッションだけ別トライ
+try:
+    from app.db import SessionLocal  # type: ignore
+    DB_SRC = "app.db"
+except Exception:
     from db import SessionLocal  # type: ignore
+    DB_SRC = "db"
 
 router = APIRouter(prefix="/settings", tags=["settings"])
-
-# 診断フラグ（環境変数）
-DIAG = os.getenv("SETTINGS_DIAG", "0").lower() not in ("0", "false", "no", "off")
 
 def get_db():
     db = SessionLocal()
@@ -25,93 +45,92 @@ def get_db():
     finally:
         db.close()
 
+# ---- DIAG 切替（環境変数 SETTINGS_DIAG=1/true） ----
+DIAG = os.getenv("SETTINGS_DIAG", "0").lower() not in ("0", "false", "no", "off")
+
+if DIAG:
+    @router.get("/_diag")
+    def _diag():
+        mod = models
+        return {
+            "ok": True,
+            "env": {"SETTINGS_DIAG": True},
+            "selected_models_src": MODELS_SRC,
+            "app_models_file": getattr(APP_MODELS, "__file__", None),
+            "root_models_file": getattr(ROOT_MODELS, "__file__", None),
+            "selected_models_file": getattr(mod, "__file__", None) if mod else None,
+            "has_UserSetting": bool(getattr(mod, "UserSetting", None)) if mod else False,
+            "app_models_err": APP_MODELS_ERR,
+            "root_models_err": ROOT_MODELS_ERR,
+            "db_src": DB_SRC,
+        }
+
+# ====== I/O モデル ======
 class SaveIn(BaseModel):
     owner: Optional[str] = None
     email: Optional[str] = None
     settings: Dict[str, Any]
 
-@router.get("/_diag")
-def _diag(db: Session = Depends(get_db)):
-    """
-    設定まわりのセルフチェック（診断用）
-    NOTE: SETTINGS_DIAG=1 のときだけ中身を返す。オフ時は 404。
-    """
-    if not DIAG:
-        raise HTTPException(status_code=404, detail="diag disabled")
-
-    info: Dict[str, Any] = {"ok": True, "env": {"SETTINGS_DIAG": True}}
-    try:
-        # モデル存在チェック
-        info["model_module"] = getattr(models, "__name__", str(models))
-        info["has_UserSetting"] = hasattr(models, "UserSetting")
-
-        if hasattr(models, "UserSetting"):
-            m = models.UserSetting
-            info["model_repr"] = repr(m)
-            # テーブル情報（列名など）
-            try:
-                cols = [c.name for c in m.__table__.columns]  # type: ignore
-            except Exception:
-                cols = []
-            info["table_cols"] = cols
-
-            # クイッククエリ（存在行数）※失敗したら理由を返す
-            try:
-                cnt = db.query(m).count()
-                info["row_count"] = cnt
-            except Exception as e:
-                info["row_count_error"] = {"type": type(e).__name__, "msg": str(e)}
-        else:
-            info["error"] = "models.UserSetting not found"
-
-    except Exception as e:
-        info["ok"] = False
-        info["error"] = {"type": type(e).__name__, "msg": str(e), "trace": traceback.format_exc()[-1000:]}
-    return info
-
+# ====== ルータ実装 ======
 @router.post("/save")
 def save_setting(payload: SaveIn, db: Session = Depends(get_db)):
+    Model = getattr(models, "UserSetting", None) if models else None
+    if Model is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "UserSetting not resolved",
+                "models_src": MODELS_SRC,
+                "app_models_file": getattr(APP_MODELS, "__file__", None),
+                "root_models_file": getattr(ROOT_MODELS, "__file__", None),
+            },
+        )
     try:
-        row = models.UserSetting(
-            owner=(payload.owner or ""),
-            email=(payload.email or ""),
+        row = Model(
+            owner=payload.owner or "",
+            email=payload.email or "",
             settings=payload.settings,
         )
         db.add(row)
         db.commit()
         db.refresh(row)
-        return {"ok": True, "id": row.id, "ts": getattr(row, "created_at", None)}
+        return {"ok": True, "id": getattr(row, "id", None), "ts": getattr(row, "created_at", None)}
     except Exception as e:
         db.rollback()
-        # 診断ONの時だけ詳細を返す（本番運用ではOFFにしてね）
-        if DIAG:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": str(e), "type": type(e).__name__, "trace": traceback.format_exc()[-1200:]},
-            )
-        raise HTTPException(status_code=500, detail="internal error")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": str(e), "type": e.__class__.__name__, "trace": traceback.format_exc()},
+        )
 
 @router.get("/load")
 def load_setting(owner: Optional[str] = None,
                  email: Optional[str] = None,
                  db: Session = Depends(get_db)):
+    Model = getattr(models, "UserSetting", None) if models else None
+    if Model is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "UserSetting not resolved",
+                "models_src": MODELS_SRC,
+                "app_models_file": getattr(APP_MODELS, "__file__", None),
+                "root_models_file": getattr(ROOT_MODELS, "__file__", None),
+            },
+        )
     try:
-        q = db.query(models.UserSetting)
+        q = db.query(Model)
         if owner:
-            q = q.filter(models.UserSetting.owner == owner)
+            q = q.filter(Model.owner == owner)
         if email:
-            q = q.filter(models.UserSetting.email == email)
-        # id が UUID文字列（文字列ソート≒新しい順になりづらい）なので created_at で降順が安全
-        row = q.order_by(getattr(models.UserSetting, "created_at", models.UserSetting.id).desc()).first()
+            q = q.filter(Model.email == email)
+        row = q.order_by(Model.created_at.desc()).first()
         if not row:
             raise HTTPException(status_code=404, detail="not found")
         return {"settings": getattr(row, "settings", {}), "ts": getattr(row, "created_at", None)}
     except HTTPException:
         raise
     except Exception as e:
-        if DIAG:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": str(e), "type": type(e).__name__, "trace": traceback.format_exc()[-1200:]},
-            )
-        raise HTTPException(status_code=500, detail="internal error")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": str(e), "type": e.__class__.__name__, "trace": traceback.format_exc()},
+        )
