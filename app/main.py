@@ -142,11 +142,13 @@ for mod in ("app.routers.strategy_router", "routers.strategy_router"):
     if try_include(mod): break
 for mod in ("app.routers.scheduler_router", "routers.scheduler_router"):
     if try_include(mod): break
-for mod in ("app.routers.ops_jobs_router", "routers.ops_jobs_router"):
-    if try_include(mod): break
+# ↓↓↓ この2行は残す
 try_include("app.routers.db_router") or try_include("routers.db_router")
 
-# ⛔ settings はここだけで一度だけ取り込む（重複禁止）
+# ⛔ ここを「for ループ」から include_once に変更
+include_once("/ops/jobs", ["app.routers.ops_jobs_router", "routers.ops_jobs_router"])
+
+# settings は既に include_once 済み（そのまま）
 include_once("/settings", ["app.routers.settings_router", "routers.settings_router"])
 
 # --- 運用補助 ---
