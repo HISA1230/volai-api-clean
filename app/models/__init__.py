@@ -1,4 +1,5 @@
 # app/models/__init__.py
+
 from .user import User
 from .prediction_log import PredictionLog
 from .owner import Owner
