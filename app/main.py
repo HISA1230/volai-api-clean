@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import os
+import pathlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -10,20 +11,20 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # ===== import を両対応にする（app.配下 / 直下のどちらでも動く） =====
-# routers.magic_login
+# 必須: magic_login
 try:
     from app.routers.magic_login import router as magic_login_router
 except Exception:
     from routers.magic_login import router as magic_login_router  # type: ignore
 
-# routers.owners（無ければスキップ可能）
+# 任意: owners（無ければスキップ）
 try:
     from app.routers.owners import router as owners_router
 except Exception:
     try:
         from routers.owners import router as owners_router  # type: ignore
     except Exception:
-        owners_router = None  # ルータ無しでも起動できるように
+        owners_router = None
 
 # db / models
 try:
@@ -65,10 +66,7 @@ if owners_router:
 # --- 起動時：DBテーブル作成 + OWNERS_LIST シード ---
 @app.on_event("startup")
 def _startup_db_seed():
-    # ① テーブル作成（存在しなければ作成）
     Base.metadata.create_all(bind=engine)
-
-    # ② OWNERS_LIST をシード（例: "学也,学也H,正恵,正恵M,共用"）
     owners_env = os.getenv("OWNERS_LIST", "")
     names = [s.strip() for s in owners_env.split(",") if s.strip()]
     if names:
@@ -81,12 +79,11 @@ def _startup_db_seed():
 # --- CORS ---
 origins_raw = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
 origins = [o.strip() for o in origins_raw.split(",") if o.strip()]
-# "*" と credentials の両立不可 → 自動で安全側に
 if origins == ["*"]:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=False,
+        allow_credentials=False,  # "*" と併用不可
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -114,7 +111,7 @@ try:
 except Exception:
     pass
 
-# --- 追加ルータの動的取り込み（どちらの配置でもOKに） ---
+# --- 追加ルータの取り込みユーティリティ ---
 def try_include(module_path: str, attr_name: str = "router") -> bool:
     try:
         mod = __import__(module_path, fromlist=[attr_name])
@@ -126,47 +123,32 @@ def try_include(module_path: str, attr_name: str = "router") -> bool:
         logging.getLogger("uvicorn").warning(f"include failed: {module_path} ({e})")
         return False
 
-for mod in ("routers.user_router", "app.routers.user_router"):
+def include_once(prefix: str, candidates: list[str]) -> None:
+    """prefix で始まる既存ルートがあれば二重登録しない。無ければ候補から最初に成功した1つだけを登録。"""
+    for r in app.router.routes:
+        p = getattr(r, "path", "")
+        if isinstance(p, str) and p.startswith(prefix):
+            return
+    for mod in candidates:
+        if try_include(mod):
+            return
+
+# --- 他ルータ（通常） ---
+for mod in ("app.routers.user_router", "routers.user_router"):
     if try_include(mod): break
 for mod in ("app.routers.predict_router", "routers.predict_router"):
     if try_include(mod): break
-for mod in ("routers.strategy_router", "app.routers.strategy_router"):
+for mod in ("app.routers.strategy_router", "routers.strategy_router"):
     if try_include(mod): break
-for mod in ("routers.scheduler_router", "app.routers.scheduler_router"):
+for mod in ("app.routers.scheduler_router", "routers.scheduler_router"):
     if try_include(mod): break
-for mod in ("routers.ops_jobs_router", "app.routers.ops_jobs_router"):
+for mod in ("app.routers.ops_jobs_router", "routers.ops_jobs_router"):
     if try_include(mod): break
+try_include("app.routers.db_router") or try_include("routers.db_router")
 
-# db（新規）
-try_include("routers.db_router") or try_include("app.routers.db_router")
+# ⛔ settings はここだけで一度だけ取り込む（重複禁止）
+include_once("/settings", ["app.routers.settings_router", "routers.settings_router"])
 
-for mod in ("routers.settings_router", "app.routers.settings_router"):
-    if try_include(mod): break
-    
-# === settings_router 直インクルード（保険） ===
-def _has_settings_routes() -> bool:
-    try:
-        for r in app.router.routes:
-            p = getattr(r, "path", "")
-            if isinstance(p, str) and p.startswith("/settings"):
-                return True
-    except Exception:
-        pass
-    return False
-
-if not _has_settings_routes():
-    try:
-        from app.routers.settings_router import router as _settings_router_direct
-    except Exception:
-        try:
-            from routers.settings_router import router as _settings_router_direct  # type: ignore
-        except Exception:
-            _settings_router_direct = None
-
-    if _settings_router_direct:
-        app.include_router(_settings_router_direct)
-        print("include ok: settings_router (direct fallback)")
-            
 # --- 運用補助 ---
 @app.get("/ops/routes", include_in_schema=False)
 def _ops_routes():
@@ -190,12 +172,17 @@ async def __echo(full_path: str, request: Request):
         "query": dict(request.query_params),
         "host": request.headers.get("host"),
     }
-import os
 
 @app.get("/ops/version", include_in_schema=False)
 def _version():
+    marker = ""
+    try:
+        marker = pathlib.Path("app/_build_id.txt").read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
     return {
         "app": "volai-api",
         "git": os.getenv("RENDER_GIT_COMMIT", "")[:8],
         "build": os.getenv("RENDER_BUILD_ID", ""),
+        "marker": marker,
     }
