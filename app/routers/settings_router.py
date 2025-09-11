@@ -190,29 +190,21 @@ def save_setting(payload: SaveIn, db: Session = Depends(get_db)):
             raise HTTPException(status_code=500, detail={"error": "save_failed", "type": type(e).__name__, "msg": str(e)})
         raise HTTPException(status_code=500, detail="internal error")
 
-# =========================
-# 読込（ORM → RAW SQL フォールバック）
-# =========================
+# =====================================
+# 読込（まず ORM、だめなら RAW）— 並び順は常に id DESC で“最新”
+# =====================================
+from sqlalchemy import text, desc
+
 @router.get("/load")
 def load_setting(
     owner: Optional[str] = None,
     email: Optional[str] = None,
-    force: Optional[str] = None,
+    force: Optional[str] = None,  # 既存互換（使わなくてもOK）
     db: Session = Depends(get_db),
 ):
     US = getattr(_MODELS, "UserSetting", None)
-    if US is None and force != "raw":
-        detail = {
-            "error": "UserSetting not resolved",
-            "models_src": _MODELS_SRC,
-            "app_models_file": _APP_MODELS_FILE,
-            "root_models_file": _ROOT_MODELS_FILE,
-        }
-        raise HTTPException(status_code=500, detail=detail)
 
-    orm_err: Optional[Exception] = None
-
-    # 1) ORM
+    # --- 1) ORM（id DESC 固定）
     if force != "raw" and US is not None:
         try:
             q = db.query(US)
@@ -220,26 +212,18 @@ def load_setting(
                 q = q.filter(US.owner == owner)
             if email:
                 q = q.filter(US.email == email)
-
-            order_cols = []
-            if hasattr(US, "updated_at"):
-                order_cols.append(desc(US.updated_at))
-            if hasattr(US, "created_at"):
-                order_cols.append(desc(US.created_at))
-            order_cols.append(desc(US.id))
-
-            row = q.order_by(*order_cols).first()
+            row = q.order_by(desc(US.id)).first()
             if not row:
                 raise HTTPException(status_code=404, detail="not found")
-
+            # tsは updated_at/created_at があればそれ、無ければ None
             ts = getattr(row, "updated_at", None) or getattr(row, "created_at", None)
             return {"settings": getattr(row, "settings", None), "ts": ts}
         except HTTPException:
             raise
-        except Exception as e_orm:
-            orm_err = e_orm  # RAW にフォールバック
+        except Exception:
+            pass  # RAW にフォールバック
 
-    # 2) RAW
+    # --- 2) RAW SQL（id DESC 固定）
     try:
         conds = []
         params: Dict[str, Any] = {}
@@ -255,20 +239,14 @@ def load_setting(
             SELECT settings, COALESCE(updated_at, created_at) AS ts
             FROM user_settings
             {where}
-            ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+            ORDER BY id DESC
             LIMIT 1
         """
         r = db.execute(text(sql), params).mappings().first()
         if not r:
             raise HTTPException(status_code=404, detail="not found (raw)")
-
-        out: Dict[str, Any] = {"settings": r.get("settings"), "ts": r.get("ts"), "note": "raw-fallback"}
-        if DIAG and orm_err is not None:
-            out["orm_err"] = str(orm_err)
-        return out
+        return {"settings": r.get("settings"), "ts": r.get("ts"), "note": "raw-id"}
     except HTTPException:
         raise
-    except Exception as e_raw:
-        if DIAG:
-            raise HTTPException(status_code=500, detail={"error": "load failed", "orm_err": str(orm_err) if orm_err else None, "raw_err": str(e_raw)})
+    except Exception:
         raise HTTPException(status_code=500, detail="internal error")
