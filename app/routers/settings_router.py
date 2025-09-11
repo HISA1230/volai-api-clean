@@ -1,4 +1,5 @@
 # app/routers/settings_router.py
+# ルータは“橋渡し”のみ。テーブル定義は一切しない。
 from __future__ import annotations
 
 import os
@@ -11,16 +12,17 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text, desc
 
-# =====================================
+# =========================
 # 設定
-# =====================================
+# =========================
+# DIAG は詳細出力フラグ。ルート登録そのものは DIAG に依存させない。
 DIAG = os.getenv("SETTINGS_DIAG", "0").lower() not in ("0", "false", "no", "off", "")
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-# =====================================
+# =========================
 # DB: app.db / db 両対応
-# =====================================
+# =========================
 def _import_db():
     try:
         from app.db import SessionLocal  # type: ignore
@@ -38,9 +40,9 @@ def get_db():
     finally:
         db.close()
 
-# =====================================
+# =========================
 # models: app.models / models 両対応（UserSetting を解決）
-# =====================================
+# =========================
 def _get_module_file(mod) -> Optional[str]:
     try:
         return inspect.getfile(mod)  # type: ignore
@@ -80,19 +82,33 @@ def _import_models() -> Tuple[Any, str, Optional[str], Optional[str], Optional[s
 
 _MODELS, _MODELS_SRC, _APP_MODELS_FILE, _ROOT_MODELS_FILE, _APP_MODELS_ERR, _ROOT_MODELS_ERR = _import_models()
 
-# =====================================
+# =========================
 # スキーマ
-# =====================================
+# =========================
 class SaveIn(BaseModel):
     owner: Optional[str] = None
     email: Optional[str] = None
     settings: Dict[str, Any]
 
-# =====================================
-# 診断（常時登録：DIAG=0 でも叩ける）
-# =====================================
+# =========================
+# 診断/所在 確認系（常時登録）
+# =========================
+@router.get("/__where")
+def __where():
+    """ このルータファイルの実体（__file__）/ DIAG / どの models を使ってるかを返す """
+    return {
+        "file": __file__,
+        "diag": DIAG,
+        "models_src": _MODELS_SRC,
+        "app_models_file": _APP_MODELS_FILE,
+        "root_models_file": _ROOT_MODELS_FILE,
+        "has_UserSetting": bool(getattr(_MODELS, "UserSetting", None)),
+        "db_src": _DB_SRC,
+    }
+
 @router.get("/_diag")
 def _diag():
+    """ 内部状態のダンプ。常時ルート登録（本番で叩かないだけ） """
     return {
         "ok": True,
         "env": {"SETTINGS_DIAG": DIAG, "RAW": os.getenv("SETTINGS_DIAG", None)},
@@ -106,9 +122,6 @@ def _diag():
         "db_src": _DB_SRC,
     }
 
-# =====================================
-# _peek（常時登録。DIAG=0 のときは 404）
-# =====================================
 @router.get("/_peek")
 def _peek(
     owner: Optional[str] = None,
@@ -116,6 +129,7 @@ def _peek(
     n: int = Query(5, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
+    """ 直近 n 件を覗く。DIAG=0 のときは中身を返さず 404 にする """
     if not DIAG:
         raise HTTPException(status_code=404, detail="not found")
 
@@ -144,9 +158,9 @@ def _peek(
             raise HTTPException(status_code=500, detail={"error": "peek_failed", "msg": str(e)})
         raise HTTPException(status_code=500, detail="internal error")
 
-# =====================================
+# =========================
 # 保存
-# =====================================
+# =========================
 @router.post("/save")
 def save_setting(payload: SaveIn, db: Session = Depends(get_db)):
     Model = getattr(_MODELS, "UserSetting", None)
@@ -181,9 +195,10 @@ def save_setting(payload: SaveIn, db: Session = Depends(get_db)):
             raise HTTPException(status_code=500, detail={"error": "save_failed", "type": type(e).__name__, "msg": str(e)})
         raise HTTPException(status_code=500, detail="internal error")
 
-# =====================================
+# =========================
 # 読込（ORM → RAW SQL フォールバック）
-# =====================================
+# updated_at → created_at → id の降順
+# =========================
 @router.get("/load")
 def load_setting(
     owner: Optional[str] = None,
@@ -201,9 +216,9 @@ def load_setting(
         }
         raise HTTPException(status_code=500, detail=detail)
 
-    orm_err = None
+    orm_err: Optional[Exception] = None
 
-    # 1) ORM（updated_at → created_at → id の降順）
+    # 1) ORM
     if force != "raw" and US is not None:
         try:
             q = db.query(US)
@@ -230,7 +245,7 @@ def load_setting(
         except Exception as e_orm:
             orm_err = e_orm  # RAW にフォールバック
 
-    # 2) RAW SQL フォールバック（COALESCE で“より新しい方”優先）
+    # 2) RAW SQL フォールバック
     try:
         conds = []
         params: Dict[str, Any] = {}
@@ -253,7 +268,7 @@ def load_setting(
         if not r:
             raise HTTPException(status_code=404, detail="not found (raw)")
 
-        out = {"settings": r.get("settings"), "ts": r.get("ts"), "note": "raw-fallback"}
+        out: Dict[str, Any] = {"settings": r.get("settings"), "ts": r.get("ts"), "note": "raw-fallback"}
         if DIAG and orm_err is not None:
             out["orm_err"] = str(orm_err)
         return out
