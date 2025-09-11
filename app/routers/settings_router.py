@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text, desc
 
-# どの版が載ったか識別するためのタグ
-ROUTER_SIG = "settings-v4-id-desc"
+# 識別タグ（/settings/__where で確認用）
+ROUTER_SIG = "settings-v5-time-desc"
 router = APIRouter(prefix="/settings", tags=["settings", ROUTER_SIG])
 
 # =========================
@@ -50,14 +50,9 @@ def _get_module_file(mod) -> Optional[str]:
         return None
 
 def _import_models() -> Tuple[Any, str, Optional[str], Optional[str], Optional[str], Optional[str]]:
-    """
-    戻り値:
-      models_module, selected_src, app_models_file, root_models_file, app_models_err, root_models_err
-    """
     app_err = root_err = None
     app_file = root_file = None
 
-    # 1) app.models 優先
     try:
         import app.models as app_models  # type: ignore
         app_file = _get_module_file(app_models)
@@ -67,7 +62,6 @@ def _import_models() -> Tuple[Any, str, Optional[str], Optional[str], Optional[s
     except Exception as e:
         app_err = repr(e)
 
-    # 2) ルート models（ブリッジ）
     try:
         import models as root_models  # type: ignore
         root_file = _get_module_file(root_models)
@@ -77,7 +71,6 @@ def _import_models() -> Tuple[Any, str, Optional[str], Optional[str], Optional[s
     except Exception as e:
         root_err = repr(e)
 
-    # 3) どちらも解決できない
     return None, "(unresolved)", app_file, root_file, app_err, root_err
 
 _MODELS, _MODELS_SRC, _APP_MODELS_FILE, _ROOT_MODELS_FILE, _APP_MODELS_ERR, _ROOT_MODELS_ERR = _import_models()
@@ -146,7 +139,7 @@ def _peek(
             SELECT id, owner, email, settings, created_at, updated_at
             FROM user_settings
             {where}
-            ORDER BY id DESC
+            ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
             LIMIT :n
         """
         rows = db.execute(text(sql), params).mappings().all()
@@ -190,22 +183,23 @@ def save_setting(payload: SaveIn, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         if DIAG:
-            raise HTTPException(status_code=500, detail={"error": "save_failed", "type": type(e).__name__, "msg": str(e)})
+            raise HTTPException(statusコード=500, detail={"error": "save_failed", "type": type(e).__name__, "msg": str(e)})
         raise HTTPException(status_code=500, detail="internal error")
 
 # =====================================
-# 読込（まず ORM、だめなら RAW）— 並び順は常に id DESC で“最新”
+# 読込（まず ORM、だめなら RAW）
+# 並び順は “updated_at→created_at→id” の降順（UUIDでも安全）
 # =====================================
 @router.get("/load")
 def load_setting(
     owner: Optional[str] = None,
     email: Optional[str] = None,
-    force: Optional[str] = None,  # 既存互換（使わなくてもOK）
+    force: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     US = getattr(_MODELS, "UserSetting", None)
 
-    # --- 1) ORM（id DESC 固定）
+    # 1) ORM
     if force != "raw" and US is not None:
         try:
             q = db.query(US)
@@ -213,9 +207,18 @@ def load_setting(
                 q = q.filter(US.owner == owner)
             if email:
                 q = q.filter(US.email == email)
-            row = q.order_by(desc(US.id)).first()
+
+            order_cols = []
+            if hasattr(US, "updated_at"):
+                order_cols.append(desc(US.updated_at))
+            if hasattr(US, "created_at"):
+                order_cols.append(desc(US.created_at))
+            order_cols.append(desc(US.id))
+
+            row = q.order_by(*order_cols).first()
             if not row:
                 raise HTTPException(status_code=404, detail="not found")
+
             ts = getattr(row, "updated_at", None) or getattr(row, "created_at", None)
             return {"settings": getattr(row, "settings", None), "ts": ts}
         except HTTPException:
@@ -223,7 +226,7 @@ def load_setting(
         except Exception:
             pass  # RAW にフォールバック
 
-    # --- 2) RAW SQL（id DESC 固定）
+    # 2) RAW
     try:
         conds = []
         params: Dict[str, Any] = {}
@@ -239,13 +242,13 @@ def load_setting(
             SELECT settings, COALESCE(updated_at, created_at) AS ts
             FROM user_settings
             {where}
-            ORDER BY id DESC
+            ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
             LIMIT 1
         """
         r = db.execute(text(sql), params).mappings().first()
         if not r:
             raise HTTPException(status_code=404, detail="not found (raw)")
-        return {"settings": r.get("settings"), "ts": r.get("ts"), "note": "raw-id"}
+        return {"settings": r.get("settings"), "ts": r.get("ts"), "note": "raw-time"}
     except HTTPException:
         raise
     except Exception:
