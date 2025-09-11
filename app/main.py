@@ -57,11 +57,15 @@ app = FastAPI(
     default_response_class=UTF8JSONResponse,
 )
 
-# --- ルータ登録（必須系）
+# --- ルータ登録（必須系） ---
 app.include_router(magic_login_router)
 # 任意系（存在すれば）
 if owners_router:
     app.include_router(owners_router)
+
+# === settings だけは “固定 import” して一度だけ登録 ===
+from app.routers.settings_router import router as settings_router  # noqa: E402
+app.include_router(settings_router)
 
 # --- 起動時：DBテーブル作成 + OWNERS_LIST シード ---
 @app.on_event("startup")
@@ -142,14 +146,14 @@ for mod in ("app.routers.strategy_router", "routers.strategy_router"):
     if try_include(mod): break
 for mod in ("app.routers.scheduler_router", "routers.scheduler_router"):
     if try_include(mod): break
-# ↓↓↓ この2行は残す
+
+# db_router は片方でOK
 try_include("app.routers.db_router") or try_include("routers.db_router")
 
-# ⛔ ここを「for ループ」から include_once に変更
+# ops/jobs は重複防止で include_once
 include_once("/ops/jobs", ["app.routers.ops_jobs_router", "routers.ops_jobs_router"])
 
-# settings は既に include_once 済み（そのまま）
-include_once("/settings", ["app.routers.settings_router", "routers.settings_router"])
+# （settings はすでに固定 import 済みなので include_once しない）
 
 # --- 運用補助 ---
 @app.get("/ops/routes", include_in_schema=False)

@@ -11,12 +11,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text, desc
 
+# どの版が載ったか識別するためのタグ
+ROUTER_SIG = "settings-v4-id-desc"
+router = APIRouter(prefix="/settings", tags=["settings", ROUTER_SIG])
+
 # =========================
 # 設定
 # =========================
 DIAG = os.getenv("SETTINGS_DIAG", "0").lower() not in ("0", "false", "no", "off", "")
-
-router = APIRouter(prefix="/settings", tags=["settings"])
 
 # =========================
 # DB: app.db / db 両対応
@@ -49,7 +51,7 @@ def _get_module_file(mod) -> Optional[str]:
 
 def _import_models() -> Tuple[Any, str, Optional[str], Optional[str], Optional[str], Optional[str]]:
     """
-    return:
+    戻り値:
       models_module, selected_src, app_models_file, root_models_file, app_models_err, root_models_err
     """
     app_err = root_err = None
@@ -95,6 +97,7 @@ class SaveIn(BaseModel):
 def __where():
     return {
         "file": __file__,
+        "sig": ROUTER_SIG,
         "diag": DIAG,
         "models_src": _MODELS_SRC,
         "app_models_file": _APP_MODELS_FILE,
@@ -193,8 +196,6 @@ def save_setting(payload: SaveIn, db: Session = Depends(get_db)):
 # =====================================
 # 読込（まず ORM、だめなら RAW）— 並び順は常に id DESC で“最新”
 # =====================================
-from sqlalchemy import text, desc
-
 @router.get("/load")
 def load_setting(
     owner: Optional[str] = None,
@@ -215,7 +216,6 @@ def load_setting(
             row = q.order_by(desc(US.id)).first()
             if not row:
                 raise HTTPException(status_code=404, detail="not found")
-            # tsは updated_at/created_at があればそれ、無ければ None
             ts = getattr(row, "updated_at", None) or getattr(row, "created_at", None)
             return {"settings": getattr(row, "settings", None), "ts": ts}
         except HTTPException:
