@@ -2,6 +2,8 @@
 from sqlalchemy import Column, Integer, String, DateTime, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
+from app.models import User, PredictionLog, Owner, UserSetting
+__all__ = ["User", "PredictionLog", "Owner", "UserSetting"]
 
 from db import Base
 
