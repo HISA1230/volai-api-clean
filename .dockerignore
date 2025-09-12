@@ -8,3 +8,4 @@ pytest_cache/
 .git
 .gitignore
 .streamlit/
+venv/
