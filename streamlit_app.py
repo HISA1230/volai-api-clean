@@ -1,39 +1,209 @@
 ﻿# streamlit_app.py — Volatility AI Minimal UI
 # (single colored table per section, AIコメントのみ、fake-rate low=green)
 
-from __future__ import annotations
-
-import os, json, traceback, importlib, base64, io
+# ------------ requests session / API helper (UNIFIED) ------------
+import os
+import io
+import json
+import traceback
+import importlib.util
+import base64
+from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 from datetime import datetime, date, time, timedelta
-from typing import Dict, Any, Tuple, Optional, List, TYPE_CHECKING
-
-import pandas as pd
-import streamlit as st
-from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import pandas as pd
+import streamlit as st
+from dotenv import load_dotenv
 
-# ------------ requests session ------------
+load_dotenv()
+
+# まず PUBLIC_*（本番UI用）を最優先に使う
+def _env_api_base() -> str:
+    return (
+        os.getenv("PUBLIC_API_BASE") or
+        os.getenv("API_BASE") or
+        "https://volai-api-prod.onrender.com"
+    ).rstrip("/")
+
+def _from_query_params() -> Optional[str]:
+    try:
+        q = st.query_params
+    except Exception:
+        q = st.experimental_get_query_params()
+    if not q:
+        return None
+    v = q.get("api")
+    if isinstance(v, list):
+        v = v[0]
+    if isinstance(v, str) and v.strip():
+        return v.strip().rstrip("/")
+    return None
+
+# 画面の“現在の接続先”を決める（?api=... > env > 既定）
+API: str = _from_query_params() or _env_api_base()
+SWAGGER_URL: str = os.getenv("PUBLIC_SWAGGER", f"{API}/docs").rstrip("/")
+
+def _is_full_url(u: str) -> bool:
+    return isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
+
+def _build_url(path_or_url: str) -> str:
+    if _is_full_url(path_or_url):
+        return path_or_url
+    return f"{API}/{path_or_url.lstrip('/')}"
+
+# ===== requests.Session（再試行つき） =====
 _session: Optional[requests.Session] = None
+
 def get_session() -> requests.Session:
     global _session
-    if _session is None:
-        s = requests.Session()
-        retries = Retry(
-            total=2, connect=2, read=2,
-            backoff_factor=0.6,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD","GET","POST","PUT","DELETE","OPTIONS","PATCH"],
-            raise_on_status=False,
-        )
-        adapter = HTTPAdapter(max_retries=retries)
-        s.mount("https://", adapter); s.mount("http://", adapter)
-        _session = s
-    return _session
+    if _session is not None:
+        return _session
+    s = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=0.4,  # 0.4, 0.8, 1.6...
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["HEAD", "GET", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    s.headers.update({
+        "User-Agent": "VolAI-UI/1.0 (+streamlit)",
+        "Accept": "application/json, text/plain, */*",
+    })
+    _session = s
+    return s
 
+# ===== 認証（必要なときだけ） =====
+def _set_token(tok: Optional[str]) -> None:
+    st.session_state["token"] = tok or ""
+
+def _get_token() -> str:
+    return st.session_state.get("token", "") or ""
+
+def _auth_headers() -> Dict[str, str]:
+    tok = _get_token()
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+def _magic_login() -> bool:
+    tok = os.getenv("AUTOLOGIN_TOKEN", "").strip()
+    if not tok:
+        return False
+    url = _build_url("/auth/magic_login")
+    resp = get_session().post(url, json={"token": tok}, timeout=15)
+    if resp.ok:
+        _set_token(resp.json().get("access_token", ""))
+        return bool(_get_token())
+    return False
+
+def _basic_login() -> bool:
+    email = os.getenv("API_EMAIL", "").strip()
+    pw    = os.getenv("API_PASSWORD", "").strip()
+    if not email or not pw:
+        return False
+    url = _build_url("/login")
+    resp = get_session().post(url, json={"email": email, "password": pw}, timeout=15)
+    if resp.ok:
+        _set_token(resp.json().get("access_token", ""))
+        return bool(_get_token())
+    return False
+
+def ensure_auth(force: bool = False) -> bool:
+    if force:
+        _set_token("")
+    if _get_token():
+        return True
+    return _magic_login() or _basic_login()
+
+# ===== メインHTTPヘルパー（この1個に統一） =====
+def req(
+    method: str,
+    path_or_url: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_data: Optional[Dict[str, Any]] = None,
+    data: Any = None,
+    headers: Optional[Dict[str, str]] = None,
+    files: Any = None,
+    timeout: int | float | tuple = 20,
+    auth: bool = False,
+    retry_on_401: bool = True,
+    retries: int = 0,
+):
+    """
+    統一HTTP呼び出し:
+      - path でもフルURLでもOK
+      - auth=True の時だけJWTを付ける
+      - JSONならdictを返す／それ以外はtext
+    """
+    url = _build_url(path_or_url)
+    s = get_session()
+
+    hdrs: Dict[str, str] = {}
+    hdrs.update(headers or {})
+    if auth:
+        if not _get_token() and not ensure_auth():
+            raise RuntimeError("Authentication failed: no token available")
+        hdrs.update(_auth_headers())
+
+    last_err: Optional[Exception] = None
+    for attempt in range(max(1, int(retries) + 1)):
+        try:
+            resp = s.request(
+                method.upper(), url,
+                params=params, json=json_data, data=data, files=files,
+                headers=hdrs, timeout=timeout,
+            )
+            if resp.status_code == 401 and auth and retry_on_401:
+                # 401は一度だけ強制再ログイン
+                if ensure_auth(force=True):
+                    hdrs.update(_auth_headers())
+                    resp = s.request(
+                        method.upper(), url,
+                        params=params, json=json_data, data=data, files=files,
+                        headers=hdrs, timeout=timeout,
+                    )
+            resp.raise_for_status()
+
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if "application/json" in ctype:
+                return resp.json()
+            try:
+                return resp.json()
+            except Exception:
+                return resp.text
+
+        except (requests.ReadTimeout, requests.ConnectTimeout) as e:
+            last_err = e
+            if attempt + 1 < max(1, int(retries) + 1):
+                import time as _t; _t.sleep(0.7 * (2 ** attempt))
+                continue
+            st.error(f"Timeout: {e}")
+            raise
+        except requests.HTTPError as e:
+            body = ""
+            try:
+                body = resp.text  # type: ignore
+            except Exception:
+                pass
+            st.error(f"HTTP {getattr(resp, 'status_code', '???')}: {body or e}")  # type: ignore
+            raise
+        except Exception as e:
+            last_err = e
+            st.error(f"Request error: {e}")
+            raise
+    if last_err:
+        raise last_err
+
+# 画面ヘッダに現在の接続先を表示
+st.caption(f"API Base = {API} ｜ Swagger = {SWAGGER_URL}")
+# ------------ /requests session / API helper ここまで ------------
 # ------------ pandas Styler 型 ------------
 if TYPE_CHECKING:
     try:
@@ -65,7 +235,6 @@ def get_api_base() -> str:
     env = os.getenv("API_BASE", "").strip().rstrip("/")
     return env if env else "http://127.0.0.1:8000"
 
-API = get_api_base()
 def autologin_if_needed():
     if st.session_state.get("token"):
         return
@@ -169,25 +338,6 @@ def api_has(path: str) -> bool:
         except Exception:
             pass
     return False
-
-def req(method: str, path: str, json_data=None, auth=False, timeout=30, retries: int=0):
-    url = f"{API}{path}"
-    headers = {"Content-Type":"application/json"}
-    if auth and st.session_state.get("token"):
-        headers["Authorization"] = f"Bearer {st.session_state['token']}"
-    s = get_session()
-    for attempt in range(retries+1):
-        try:
-            r = s.request(method, url, headers=headers, json=json_data, timeout=timeout)
-            r.raise_for_status()
-            ctype = (r.headers.get("content-type") or "").lower()
-            return r.json() if ctype.startswith("application/json") else r.text
-        except (requests.ReadTimeout, requests.ConnectTimeout):
-            if attempt < retries:
-                import time as _t; _t.sleep(0.7*(2**attempt)); continue
-            raise
-        except Exception:
-            raise
 
 # ---- ISO / epoch 自動判定
 def to_utc_series(ts_col) -> pd.Series:
@@ -431,7 +581,7 @@ def resolve_target_date_for_filter(target_date_et: Optional[date], df_ref: pd.Da
 # ヘッダ & サイドバー
 # =========================
 st.title("Volatility AI – Minimal UI")
-st.caption(f"API Base: {API} ｜ Swagger: {API}/docs")
+st.caption(f"API Base: {API} ｜ Swagger: {SWAGGER_URL}")
 
 with st.sidebar:
     st.subheader("ログイン")
