@@ -1,24 +1,18 @@
+﻿# requirements.txt (normalized)
 fastapi
 uvicorn[standard]
 sqlalchemy>=2.0
-psycopg2-binary
+psycopg2-binary==2.9.10
 email-validator>=2.2
 pydantic>=2
 pandas
 python-dotenv
-
-# --- auth pins (唯一の指定はこれだけに) ---
 bcrypt==4.0.1
 passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
-
-# --- add for prod imports ---
 PyJWT>=2.8
 python-multipart
 requests>=2.31
 joblib>=1.3
-
 streamlit
-# --- DB migrations ---
 alembic==1.16.5
-psycopg2-binary==2.9.9
