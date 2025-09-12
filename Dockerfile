@@ -1,30 +1,22 @@
-# UI 用
+# syntax=docker/dockerfile:1
 FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-ENV PIP_NO_CACHE_DIR=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
-# 依存（ca-certificates も入れる）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential ca-certificates curl \
- && rm -rf /var/lib/apt/lists/*
+    curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-COPY requirements-ui.txt .
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements-ui.txt
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# アプリ本体
-COPY streamlit_app.py .
+COPY . .
 
-EXPOSE 8502
+EXPOSE 10000
 
-# ← バックスラッシュ連結だと空行で壊れやすいので、ENV を分割（安全）
-ENV STREAMLIT_SERVER_PORT=${PORT:-8502}
-ENV STREAMLIT_SERVER_ENABLECORS=false
-ENV STREAMLIT_SERVER_ENABLEXsrfProtection=false
-ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
-
-# PORT が来たらそれを使い、無ければ 8502
-CMD ["bash","-lc","streamlit run streamlit_app.py --server.port=${PORT:-8502} --server.address=0.0.0.0"]
+# Alembic → Uvicorn（Render の $PORT を使う）
+CMD ["bash", "-lc", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
