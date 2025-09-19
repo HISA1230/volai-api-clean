@@ -1,5 +1,34 @@
-﻿venv/
+﻿# .gitignore
+
+venv/
 __pycache__/
 .env
 *.pyc
 .DS_Store
+
+# ログとバックアップ
+logs/
+backups/
+*.log
+.env.bak
+
+# エディタ/IDE
+.vscode/
+.idea/
+
+# テスト/カバレッジ
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OSごみ
+Thumbs.db
+
+# 一時/バックアップ
+*.bak
+*.old
+*.orig
+*.tmp
+
+# 単発成果物（必要なら）
+logs_summary.xlsx
