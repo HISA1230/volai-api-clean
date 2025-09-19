@@ -1,19 +1,17 @@
-# db.py
+# volatility_ai/db.py
 import os
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import sessionmaker
 
-DATABASE_URL = os.getenv("SQLALCHEMY_DATABASE_URL") or os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL/SQLALCHEMY_DATABASE_URL is not set")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./volai.db")
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+connect_args = {}
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False}
 
-class Base(DeclarativeBase):
-    pass
+engine = create_engine(DATABASE_URL, future=True, echo=False, connect_args=connect_args)
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
 
-# FastAPI 依存注入用
 def get_db():
     db = SessionLocal()
     try:

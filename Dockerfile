@@ -18,8 +18,10 @@ COPY . .
 
 EXPOSE 10000
 
-# ① Alembic に使わせる ini を明示
-**ENV ALEMBIC_CONFIG=alembic.ini**
-
-# ② -c alembic.ini を明示して実行（= script_location を確実に読ませる）
-**CMD ["bash", "-lc", "alembic -c alembic.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]**
+- # ① Alembic に使わせる ini を明示
+- ENV ALEMBIC_CONFIG=alembic.ini
+-
+- # Alembic → Uvicorn の順
+- CMD ["bash","-lc","alembic -c alembic.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
++ # 一時対応：まずはサーバーを確実に起動
++ CMD ["bash","-lc","uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

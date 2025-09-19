@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 # ===== import を両対応にする（app.配下 / 直下のどちらでも動く） =====
 # 必須: magic_login
@@ -26,7 +27,7 @@ except Exception:
     except Exception:
         owners_router = None
 
-# db / models
+# db / models（先に一度だけ import。以後はこの SessionLocal/engine を使い回し）
 try:
     from app.db import engine, Base, SessionLocal
     from app import models
@@ -59,12 +60,14 @@ app = FastAPI(
 
 # --- ルータ登録（必須系） ---
 app.include_router(magic_login_router)
-# 任意系（存在すれば）
 if owners_router:
     app.include_router(owners_router)
 
-# === settings だけは “固定 import” して一度だけ登録 ===
-from app.routers.settings_router import router as settings_router  # noqa: E402
+# === settings（固定 import／必要なら fallback 付に変更可）===
+try:
+    from app.routers.settings_router import router as settings_router
+except Exception:
+    from routers.settings_router import router as settings_router  # type: ignore
 app.include_router(settings_router)
 
 # --- 起動時：DBテーブル作成 + OWNERS_LIST シード ---
@@ -138,6 +141,9 @@ def include_once(prefix: str, candidates: list[str]) -> None:
             return
 
 # --- 他ルータ（通常） ---
+# auto_router（/auto 配下）は router 側で prefix="/auto" を付ける運用
+for mod in ("app.routers.auto_router", "routers.auto_router"):
+    if try_include(mod): break
 for mod in ("app.routers.user_router", "routers.user_router"):
     if try_include(mod): break
 for mod in ("app.routers.predict_router", "routers.predict_router"):
@@ -154,6 +160,24 @@ try_include("app.routers.db_router") or try_include("routers.db_router")
 include_once("/ops/jobs", ["app.routers.ops_jobs_router", "routers.ops_jobs_router"])
 
 # （settings はすでに固定 import 済みなので include_once しない）
+
+# === ops/dbinfo（import 成功に依らず常に出す） ===
+from sqlalchemy import text  # 上で import 済みなら重複OK（無害）
+try:
+    from app.db import SessionLocal
+except Exception:
+    from db import SessionLocal  # type: ignore
+
+@app.get("/ops/dbinfo", include_in_schema=False)
+def ops_dbinfo():
+    try:
+        with SessionLocal() as db:
+            bind = db.get_bind()
+            url = bind.url.render_as_string(hide_password=True)
+            row = db.execute(text("select current_database(), current_user")).fetchone()
+            return {"ok": True, "url": url, "db": row[0], "user": row[1]}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 # --- 運用補助 ---
 @app.get("/ops/routes", include_in_schema=False)
@@ -188,7 +212,51 @@ def _version():
         pass
     return {
         "app": "volai-api",
-        "git": os.getenv("RENDER_GIT_COMMIT", "")[:8],
+        "git": os.getenv("RENDER_GIT_COMMIT", "")[:7],
         "build": os.getenv("RENDER_BUILD_ID", ""),
         "marker": marker,
     }
+    
+@app.get("/ops/dbenv", include_in_schema=False)
+def _dbenv():
+    import os, urllib.parse as u
+    rows = {}
+    for k in ("SQLALCHEMY_DATABASE_URL","DATABASE_URL"):
+        s = os.getenv(k, "")
+        p = u.urlparse(s)
+        rows[k] = {
+            "present": bool(s),
+            "scheme": p.scheme,
+            "host": p.hostname,
+            "port": p.port,
+            "path": p.path,
+            "has_space_in_pw": (" " in (p.password or "")),
+        }
+    return rows    
+
+# === 追加: owners の診断と再シード ===
+from sqlalchemy import select  # 既に import 済みなら重複OK
+
+@app.get("/ops/owners_diag", include_in_schema=False)
+def owners_diag():
+    try:
+        owners_env = os.getenv("OWNERS_LIST", "")
+        env_list = [s.strip() for s in owners_env.split(",") if s.strip()]
+        with SessionLocal() as db:
+            rows = db.execute(select(models.Owner.name).order_by(models.Owner.name)).scalars().all()
+        return {"ok": True, "env": env_list, "table": rows}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+@app.post("/ops/owners_seed", include_in_schema=False)
+def owners_seed():
+    owners_env = os.getenv("OWNERS_LIST", "")
+    names = [s.strip() for s in owners_env.split(",") if s.strip()]
+    added = []
+    with SessionLocal() as db:
+        for n in names:
+            if not db.query(models.Owner).filter_by(name=n).first():
+                db.add(models.Owner(name=n))
+                added.append(n)
+        db.commit()
+    return {"ok": True, "added": added}
