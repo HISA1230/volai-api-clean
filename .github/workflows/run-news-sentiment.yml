@@ -1,9 +1,9 @@
-﻿name: run-news-sentiment
+name: run-news-sentiment
 
 on:
   schedule:
-    - cron: "5 * * * *"   # 毎時:05に起動（DST安全のため毎時起動→後段のゲートで20時だけ実行）
-  workflow_dispatch:      # 手動の「Run workflow」ボタン用
+    - cron: "*/5 * * * *"   # 5分おきに起動（後段ゲートで 20:00 / 07:30 だけ実行）
+  workflow_dispatch:        # 手動の「Run workflow」ボタン
 
 jobs:
   run:
@@ -15,7 +15,7 @@ jobs:
       cancel-in-progress: true
 
     steps:
-      - name: Gate by Toronto 20:00
+      - name: Gate by Toronto 20:00 or 07:30
         id: gate
         shell: bash
         run: |
@@ -23,16 +23,20 @@ jobs:
           echo "UTC:      $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
           echo "Toronto:  $(TZ=America/Toronto date '+%Y-%m-%d %H:%M:%S %Z')"
           hr="$(TZ=America/Toronto date +%H)"
-          # 週末スキップしたいなら↓の 2行をアンコメント（1=Mon … 7=Sun）
-          # dow="$(TZ=America/Toronto date +%u)"
-          # if [ "$dow" -ge 6 ]; then echo "Weekend. Skip."; echo "run=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          if [ "$hr" != "20" ]; then
-            echo "Not 20:00 in Toronto (hr=$hr). Skip."
+          min="$(TZ=America/Toronto date +%M)"
+          echo "Local(Toronto) hr=$hr min=$min"
+
+          # 実行条件:
+          # - 20:00〜20:04 の5分窓
+          # - 07:30〜07:34 の5分窓
+          if { [ "$hr" = "20" ] && [ "$min" -ge 0 ] && [ "$min" -le 4 ]; } || \
+             { [ "$hr" = "07" ] && [ "$min" -ge 30 ] && [ "$min" -le 34 ]; }
+          then
+            echo "run=true"  >> "$GITHUB_OUTPUT"
+          else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "Outside window; skip."
           fi
-          echo "It's 20:00 in Toronto. Running."
-          echo "run=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         if: steps.gate.outputs.run == 'true'
@@ -63,6 +67,6 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
-          # ここに実処理を置く。例：
-          # python -m build.train
-          echo "TODO: run your nightly job here"
+          # あなたの本処理コマンドをここへ
+          # 例:  python -m build.train
+          echo "Nightly job running..."
