@@ -31,6 +31,4 @@ jobs:
           echo FRED_API_KEY=${{ secrets.FRED_API_KEY }} >> .env
           echo ALIGN_CALENDAR_UNION_FFILL=1 >> .env
 
-      - name: Run tests
-        run: pytest -q -k "offline or schema"
-
+      - name: Run tests (offline + schema only)`n        run: pytest -q -k "offline or schema"
