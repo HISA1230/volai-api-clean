@@ -2,19 +2,27 @@
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
-      - name: Install dev deps
+      - name: Install deps (runtime + dev)
         run: |
           python -m pip install --upgrade pip
+          pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
       - name: Prepare .env
