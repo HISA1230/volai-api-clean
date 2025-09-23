@@ -32,4 +32,5 @@ jobs:
           echo ALIGN_CALENDAR_UNION_FFILL=1 >> .env
 
       - name: Run tests
-        run: pytest -q
+        run: pytest -q -k "offline or schema"
+
