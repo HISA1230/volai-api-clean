@@ -2,8 +2,10 @@ name: run-news-sentiment
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # 5分おきに起動（後段ゲートで 20:00 / 07:30 だけ実行）
-  workflow_dispatch:        # 手動の「Run workflow」ボタン
+    # 5分おきに起動（後段のゲートで 20:00 / 07:30 だけ実行）
+    - cron: "*/5 * * * *"
+  # 手動の「Run workflow」ボタン
+  workflow_dispatch:
 
 jobs:
   run:
@@ -13,6 +15,8 @@ jobs:
     concurrency:
       group: run-news-sentiment-${{ github.ref }}
       cancel-in-progress: true
+    env:
+      PYTHONUTF8: "1"
 
     steps:
       - name: Gate by Toronto 20:00 or 07:30
@@ -38,14 +42,16 @@ jobs:
             echo "Outside window; skip."
           fi
 
-      - uses: actions/checkout@v4
+      - name: Checkout
         if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
         if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
+          cache: "pip"
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
@@ -59,14 +65,15 @@ jobs:
       - name: Prepare .env
         if: steps.gate.outputs.run == 'true'
         run: |
-          echo FMP_API_KEY=${{ secrets.FMP_API_KEY }} >> .env
-          echo FRED_API_KEY=${{ secrets.FRED_API_KEY }} >> .env
-          echo ALIGN_CALENDAR_UNION_FFILL=1 >> .env
+          {
+            echo FMP_API_KEY=${{ secrets.FMP_API_KEY }}
+            echo FRED_API_KEY=${{ secrets.FRED_API_KEY }}
+            echo ALIGN_CALENDAR_UNION_FFILL=1
+          } >> .env
 
       - name: Run pipeline
         if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
-          # あなたの本処理コマンドをここへ
-          # 例:  python -m build.train
-          echo "Nightly job running..."
+          # あなたの本処理コマンドをここへ（例は学習パイプライン）
+          python -m build.train
