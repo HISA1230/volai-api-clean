@@ -47,3 +47,4 @@ models/**/*.pkl.bak
 logs_summary.xlsx
 models/metrics_history.csv
 
+!features/*.yaml

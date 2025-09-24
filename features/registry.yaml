@@ -1,0 +1,10 @@
+﻿features:
+  - name: vix
+    provider: fmp
+    freq: D
+  - name: us10y_yield
+    provider: fmp
+    freq: D
+  - name: cpi_yoy
+    provider: fred
+    freq: M
