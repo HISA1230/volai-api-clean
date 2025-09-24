@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 on:
   push:
   pull_request:
@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
+          cache: "pip"
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
@@ -25,15 +25,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
-          if (Test-Path requirements-dev.txt) {
-            pip install -r requirements-dev.txt
-          } else {
-            pip install pytest httpx
-          }
-
-      - name: Sanity: show pytest version
-        shell: pwsh
-        run: python -m pytest --version
+          if (Test-Path requirements-dev.txt) { pip install -r requirements-dev.txt }
 
       - name: Prepare .env
         shell: pwsh
@@ -42,10 +34,25 @@ jobs:
           "FRED_API_KEY=${{ secrets.FRED_API_KEY }}" | Out-File -FilePath .env -Append -Encoding ascii
           "ALIGN_CALENDAR_UNION_FFILL=1"          | Out-File -FilePath .env -Append -Encoding ascii
 
-      - name: Collect-only (fail fast)
+      # 縺薙％縺九ｉ霑ｽ蜉・郁ｨｺ譁ｭ逕ｨ・・      - name: Debug env
         shell: pwsh
-        run: python -m pytest --collect-only -q -k "offline or schema"
+        run: |
+          python -V
+          echo "---- pytest.ini ----"
+          if (Test-Path pytest.ini) { Get-Content pytest.ini | %{ $_ } } else { echo "pytest.ini not found" }
+          echo "---- files ----"
+          git ls-files
+          echo "---- pip list (head) ----"
+          pip list | Select-Object -First 100
+
+      - name: Pytest collect-only (what will run?)
+        shell: pwsh
+        run: |
+          pytest --collect-only -q -k 'offline or schema' || exit 1
+      # 縺薙％縺ｾ縺ｧ霑ｽ蜉
 
       - name: Run tests (offline/schema only)
         shell: pwsh
-        run: python -m pytest -q -k "offline or schema"
+        run: |
+          pytest -vv -k 'offline or schema'
+
