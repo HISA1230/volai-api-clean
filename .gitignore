@@ -44,4 +44,4 @@ models/**/*.pkl.bak
 *.pkl
 
 # --- One-off artifacts (必要なら) ---
-logs_summary.xlsx
+logs_summary.xlsxmodels/**/*.csv
