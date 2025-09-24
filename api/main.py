@@ -1,5 +1,7 @@
-﻿# -*- coding: utf-8 -*-
-from __future__ import annotations
+﻿from __future__ import annotations
+import subprocess, sys, json
+import subprocess, sys, json
+# -*- coding: utf-8 -*-
 from typing import List
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -135,3 +137,19 @@ def features_preview(start: str | None = None, end: str | None = None):
     if isinstance(out, dict) and "data" not in out:
         out["data"] = []
     return out
+
+@app.post("/train/trigger")
+def train_trigger():
+    # python -m build.train を実行（tests は subprocess.run を monkeypatch します）
+    cmd = [sys.executable, "-m", "build.train"]
+    cp = subprocess.run(cmd, capture_output=True, text=True)
+    out = {"returncode": cp.returncode, "stdout": cp.stdout, "stderr": cp.stderr}
+    # 標準出力が JSON ならマージして返す
+    try:
+        parsed = json.loads(cp.stdout)
+        if isinstance(parsed, dict):
+            out.update(parsed)
+    except Exception:
+        pass
+    return out
+
