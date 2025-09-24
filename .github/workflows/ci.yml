@@ -25,7 +25,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
-          if (Test-Path requirements-dev.txt) { pip install -r requirements-dev.txt }
+          if (Test-Path requirements-dev.txt) {
+            pip install -r requirements-dev.txt
+          } else {
+            pip install pytest httpx
+          }
 
       - name: Prepare .env
         shell: pwsh
@@ -34,7 +38,7 @@ jobs:
           "FRED_API_KEY=${{ secrets.FRED_API_KEY }}" | Out-File -FilePath .env -Append -Encoding ascii
           "ALIGN_CALENDAR_UNION_FFILL=1"          | Out-File -FilePath .env -Append -Encoding ascii
 
-      # 縺薙％縺九ｉ霑ｽ蜉・郁ｨｺ譁ｭ逕ｨ・・      - name: Debug env
+      - name: Debug env
         shell: pwsh
         run: |
           python -V
@@ -48,11 +52,9 @@ jobs:
       - name: Pytest collect-only (what will run?)
         shell: pwsh
         run: |
-          pytest --collect-only -q -k 'offline or schema' || exit 1
-      # 縺薙％縺ｾ縺ｧ霑ｽ蜉
+          python -m pytest --collect-only -q -k "offline or schema"
 
       - name: Run tests (offline/schema only)
         shell: pwsh
         run: |
-          pytest -vv -k 'offline or schema'
-
+          python -m pytest -q -k "offline or schema"
