@@ -2,7 +2,7 @@ name: run-news-sentiment
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # 5分おきに起動（下のゲートで 20:00 / 07:30 だけ実行）
+    - cron: "*/5 * * * *"   # 5分おき起動（ゲートで 20:00 / 07:30 だけ実行）
   workflow_dispatch:
 
 jobs:
@@ -15,7 +15,7 @@ jobs:
       cancel-in-progress: true
 
     steps:
-      # ─── 実行ゲート：トロント時間 20:00〜20:04 / 07:30〜07:34 だけ run=true ───
+      # ── 実行ゲート：トロント 20:00〜20:04 / 07:30〜07:34 だけ進む ──
       - name: Gate by Toronto 20:00 or 07:30
         id: gate
         shell: bash
@@ -26,15 +26,14 @@ jobs:
           hr="$(TZ=America/Toronto date +%H)"
           min="$(TZ=America/Toronto date +%M)"
           echo "Local(Toronto) hr=$hr min=$min"
-
           if { [ "$hr" = "20" ] && [ "$min" -ge 0 ] && [ "$min" -le 4 ]; } || \
              { [ "$hr" = "07" ] && [ "$min" -ge 30 ] && [ "$min" -le 34 ]; }
           then
-            echo "It's within the execution window. Proceed."
             echo "run=true"  >> "$GITHUB_OUTPUT"
+            echo "It's within the execution window. Proceed."
           else
-            echo "Outside window; skip."
             echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Outside window; skip."
           fi
 
       - uses: actions/checkout@v4
@@ -49,13 +48,13 @@ jobs:
             requirements.txt
             requirements-dev.txt
 
-      - name: Ensure jq (for JSON handling)
+      - name: Ensure jq
         if: steps.gate.outputs.run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
 
-      # ─── ヘルスチェック（本文とHTTPコードを分離して扱う） ───
+      # ── ヘルスチェック：本文とHTTPコードを分離して扱う ──
       - name: Health check with retry
         if: steps.gate.outputs.run == 'true'
         id: health
@@ -64,12 +63,14 @@ jobs:
           BASE: ${{ secrets.NEWS_API_BASE }}   # 例: https://api.example.com
         run: |
           set -euo pipefail
+          : "${BASE:?NEWS_API_BASE secret is required}"
           echo "Health check with retry..."
           code="000"
           for i in {1..6}; do
             body_file="$(mktemp)"
             code_file="$(mktemp)"
             curl -sS --connect-timeout 5 --max-time 10 \
+              -H 'Accept: application/json' \
               -o "$body_file" -w '%{http_code}' \
               "$BASE/health" | tee "$code_file" >/dev/null || true
             code="$(cat "$code_file" || true)"
@@ -81,12 +82,12 @@ jobs:
             sleep 5
           done
           if [ "${code:-000}" != "200" ]; then
-            echo "::error::Health check failed. Response body:"
-            cat "$body_file" || true
+            echo "::error::Health check failed. Response body follows:"
+            head -c 800 "$body_file" || true
             exit 1
           fi
 
-      # ─── ログイン（本文とHTTPコードを分離→jqでトークン抽出） ───
+      # ── ログイン：本文(JSON)とコードを分離。JSON検証＆.token 抽出。失敗時は本文を表示 ──
       - name: Login and get token (robust)
         if: steps.gate.outputs.run == 'true'
         id: auth
@@ -97,10 +98,15 @@ jobs:
           PASS: ${{ secrets.NEWS_PASS }}
         run: |
           set -euo pipefail
+          : "${BASE:?NEWS_API_BASE secret is required}"
+          : "${USER:?NEWS_USER secret is required}"
+          : "${PASS:?NEWS_PASS secret is required}"
+
           body_file="$(mktemp)"
           code_file="$(mktemp)"
 
-          curl -sS --retry 5 --retry-delay 2 --connect-timeout 5 --max-time 15 \
+          curl -sS --retry 5 --retry-delay 2 --connect-timeout 5 --max-time 20 \
+            -H 'Accept: application/json' \
             -H 'Content-Type: application/json' \
             -d "{\"user\":\"$USER\",\"pass\":\"$PASS\"}" \
             -o "$body_file" -w '%{http_code}' \
@@ -109,9 +115,24 @@ jobs:
           code="$(cat "$code_file" || true)"
           echo "HTTP code: ${code:-000}"
 
+          # まず JSON として妥当かチェック
+          if ! jq -e . "$body_file" >/dev/null 2>&1; then
+            echo "::error::Login response is not JSON. Body follows:"
+            head -c 800 "$body_file" || true
+            exit 1
+          fi
+
+          # .token があるか
+          if ! jq -e 'has("token")' "$body_file" >/dev/null 2>&1; then
+            echo "::error::Login JSON has no .token. Body follows:"
+            cat "$body_file" | jq . || cat "$body_file"
+            exit 1
+          fi
+
+          # HTTP 200 以外ならエラーボディを出して終了
           if [ "${code:-000}" != "200" ]; then
-            echo "::error::Login failed. Response body:"
-            cat "$body_file" || true
+            echo "::error::Login HTTP ${code:-000}. Body follows:"
+            cat "$body_file" | jq . || cat "$body_file"
             exit 1
           fi
 
@@ -119,14 +140,12 @@ jobs:
           echo "token acquired"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
-      # ─── 依存インストール（必要なら） ───
       - name: Install deps
         if: steps.gate.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # ─── .env（FMP/FREDキーなど） ───
       - name: Prepare .env
         if: steps.gate.outputs.run == 'true'
         run: |
@@ -134,7 +153,6 @@ jobs:
           echo FRED_API_KEY=${{ secrets.FRED_API_KEY }} >> .env
           echo ALIGN_CALENDAR_UNION_FFILL=1 >> .env
 
-      # ─── 本処理 ───
       - name: Run pipeline
         if: steps.gate.outputs.run == 'true'
         shell: bash
@@ -144,8 +162,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "Nightly job running..."
-          # 例：トークンを付けてエンドポイントを叩く
+          # 例：API実行（必要に応じて差し替え）
           # curl -sS -H "Authorization: Bearer $TOKEN" "$API_BASE/news/sentiment/run"
-          #
-          # 例：リポジトリ内のPythonスクリプトを実行
           # python -m pipelines.news_sentiment --base "$API_BASE" --token "$TOKEN"
