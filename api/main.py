@@ -1,15 +1,25 @@
 ﻿from __future__ import annotations
-import subprocess, sys, json
-import subprocess, sys, json
-# -*- coding: utf-8 -*-
+
+import json
+import subprocess
+import sys
+import os
 from typing import List
-from fastapi import FastAPI
-from pydantic import BaseModel
+
 import pandas as pd
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from build.feature_builder import FeatureBuilder
 
 app = FastAPI(title="Volatility AI API", version="0.1.3")
+
+# ---- 静的ファイル（favicon など）の配信設定：app 生成直後がベスト ----
+# 例: app/static/favicon.ico があれば /static/favicon.ico で配信されます
+STATIC_DIR = os.path.join(os.getcwd(), "app", "static")
+if os.path.isdir(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 class PredictResponse(BaseModel):
     horizon: int
@@ -19,6 +29,7 @@ class PredictResponse(BaseModel):
 class ModelService:
     def __init__(self):
         self.ready = False
+
     def predict(self, X: pd.DataFrame) -> List[float]:
         return [0.0] * len(X)
 
@@ -83,7 +94,11 @@ def predict(symbol: str = "SPY", horizon: int = 1, start: str | None = None, end
         wide = pd.DataFrame({"bias": [1.0]}, index=[last_date])
     else:
         last_date = feats["date"].max()
-        wide = feats[feats["date"] == last_date].pivot_table(index="date", columns="name", values="value").fillna(0.0)
+        wide = (
+            feats[feats["date"] == last_date]
+            .pivot_table(index="date", columns="name", values="value")
+            .fillna(0.0)
+        )
         if wide.empty:
             wide = pd.DataFrame({"bias": [1.0]}, index=[last_date])
     yhat = model_svc.predict(wide)
@@ -152,4 +167,3 @@ def train_trigger():
     except Exception:
         pass
     return out
-
