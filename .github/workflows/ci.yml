@@ -11,6 +11,7 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -20,16 +21,19 @@ jobs:
             requirements-dev.txt
 
       - name: Install deps (runtime + dev)
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          if exist requirements.txt ( pip install -r requirements.txt )
-          if exist requirements-dev.txt ( pip install -r requirements-dev.txt )
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
+          if (Test-Path requirements-dev.txt) { pip install -r requirements-dev.txt }
 
       - name: Prepare .env
+        shell: pwsh
         run: |
-          echo FMP_API_KEY=${{ secrets.FMP_API_KEY }}>> .env
-          echo FRED_API_KEY=${{ secrets.FRED_API_KEY }}>> .env
-          echo ALIGN_CALENDAR_UNION_FFILL=1>> .env
+          "FMP_API_KEY=${{ secrets.FMP_API_KEY }}" | Out-File -FilePath .env -Append -Encoding ascii
+          "FRED_API_KEY=${{ secrets.FRED_API_KEY }}" | Out-File -FilePath .env -Append -Encoding ascii
+          "ALIGN_CALENDAR_UNION_FFILL=1"          | Out-File -FilePath .env -Append -Encoding ascii
 
       - name: Run tests (offline/schema only)
+        shell: pwsh
         run: pytest -q -k "offline or schema"
