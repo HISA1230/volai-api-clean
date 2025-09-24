@@ -2,7 +2,7 @@ name: run-news-sentiment
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/5 * * * *"   # 5分おきに起動（後段ゲートで 20:00 / 07:30 だけ実行）
   workflow_dispatch:
 
 jobs:
@@ -25,6 +25,10 @@ jobs:
           hr="$(TZ=America/Toronto date +%H)"
           min="$(TZ=America/Toronto date +%M)"
           echo "Local(Toronto) hr=$hr min=$min"
+
+          # 実行条件:
+          # - 20:00〜20:04 の5分窓
+          # - 07:30〜07:34 の5分窓
           if { [ "$hr" = "20" ] && [ "$min" -ge 0 ] && [ "$min" -le 4 ]; } || \
              { [ "$hr" = "07" ] && [ "$min" -ge 30 ] && [ "$min" -le 34 ]; }
           then
@@ -37,6 +41,15 @@ jobs:
 
       - uses: actions/checkout@v4
         if: steps.gate.outputs.run == 'true'
+
+      - name: DEBUG show workflow file (run-news-sentiment)
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          echo "Ref: $GITHUB_REF  SHA: $GITHUB_SHA"
+          echo "Workflow: $GITHUB_WORKFLOW"
+          echo "Workflow file ref: $GITHUB_WORKFLOW_REF"
+          echo "===== .github/workflows/run-news-sentiment.yml ====="
+          cat .github/workflows/run-news-sentiment.yml
 
       - uses: actions/setup-python@v5
         if: steps.gate.outputs.run == 'true'
@@ -77,6 +90,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "Nightly job running..."
-          # 例:
+          # ここに本処理コマンドを置いてください（例）
           # python -m build.train
           # curl -sS http://localhost:8080/train/trigger
