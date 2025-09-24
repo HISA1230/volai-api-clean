@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
@@ -28,7 +28,7 @@ jobs:
           if (Test-Path requirements-dev.txt) {
             pip install -r requirements-dev.txt
           } else {
-            pip install pytest
+            pip install pytest httpx
           }
 
       - name: Sanity: show pytest version
