@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 on:
   push:
   pull_request:
@@ -34,6 +34,25 @@ jobs:
           "FRED_API_KEY=${{ secrets.FRED_API_KEY }}" | Out-File -FilePath .env -Append -Encoding ascii
           "ALIGN_CALENDAR_UNION_FFILL=1"          | Out-File -FilePath .env -Append -Encoding ascii
 
+      # ここから追加（診断用）
+      - name: Debug env
+        shell: pwsh
+        run: |
+          python -V
+          echo "---- pytest.ini ----"
+          if (Test-Path pytest.ini) { Get-Content pytest.ini | %{ $_ } } else { echo "pytest.ini not found" }
+          echo "---- files ----"
+          git ls-files
+          echo "---- pip list (head) ----"
+          pip list | Select-Object -First 100
+
+      - name: Pytest collect-only (what will run?)
+        shell: pwsh
+        run: |
+          pytest --collect-only -q -k 'offline or schema' || exit 1
+      # ここまで追加
+
       - name: Run tests (offline/schema only)
         shell: pwsh
-        run: pytest -q -k "offline or schema"
+        run: |
+          pytest -vv -k 'offline or schema'
