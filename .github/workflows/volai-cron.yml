@@ -16,54 +16,64 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    # 走り過ぎ防止（同じジョブが重なったら新しい方は待機）
+    # 走り過ぎ防止（同じジョブが重なったら新しい方は待機しない＝古い方が走り切る）
     concurrency:
-      group: volai-cron
+      group: volai-cron-${{ github.ref }}
       cancel-in-progress: false
 
     timeout-minutes: 10
 
     steps:
+      - uses: actions/checkout@v4
+
+      # 実際に runner が読んだ yml の中身をログに出す（決定打のデバッグ）
+      - name: DEBUG show workflow file (volai-cron)
+        run: |
+          echo "Ref: $GITHUB_REF  SHA: $GITHUB_SHA"
+          echo "Workflow: $GITHUB_WORKFLOW"
+          echo "Workflow file ref: $GITHUB_WORKFLOW_REF"
+          echo "===== .github/workflows/volai-cron.yml ====="
+          cat .github/workflows/volai-cron.yml
+
       # 便利ログ：現地/UTCの現在時刻を常に出力（トラブル時の確認用）
       - name: Log clocks (UTC & Toronto)
         run: |
           echo "UTC:      $(date -u '+%Y-%m-%d %H:%M:%S %Z')"
           echo "Toronto:  $(TZ=America/Toronto date '+%Y-%m-%d %H:%M:%S %Z')"
 
-      # ★最小パッチ：20:00トロント以外はskip判定を出力（以降のステップは if で制御）
+      # 20:00トロント以外はskip判定を出力（以降のステップは if で制御）
       - name: Run only at 20:00 Toronto (DST-safe guard)
         id: timecheck
+        shell: bash
         run: |
+          set -euo pipefail
           hr="$(TZ=America/Toronto date +%H)"
           if [ "$hr" = "20" ]; then
             echo "It's 20:00 in Toronto. Proceed."
-            echo "run=1" >> $GITHUB_OUTPUT
+            echo "run=1" >> "$GITHUB_OUTPUT"
           else
             echo "Not 20:00 in Toronto (hr=$hr). Skip."
-            echo "run=0" >> $GITHUB_OUTPUT
+            echo "run=0" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install jq
         if: steps.timecheck.outputs.run == '1'
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Run news_sentiment via /ops/jobs/run (robust w/ retry)
+      - name: Health check with retry
         if: steps.timecheck.outputs.run == '1'
         env:
           BASE: ${{ secrets.VOLAI_BASE }}
-          EMAIL: ${{ secrets.VOLAI_EMAIL }}
-          PASSWORD: ${{ secrets.VOLAI_PASSWORD }}
+        shell: bash
         run: |
           set -euo pipefail
-
-          # 末尾スラ除去
           BASE="${BASE%/}"
           echo "BASE=$BASE"
 
           echo "Health check with retry..."
           ok=0
           for i in {1..10}; do
-            code=$(curl -sS -m 10 -L -o /dev/null -w '%{http_code}' "$BASE/health" || true)
+            code="$(curl -sS -m 10 -L -o /dev/null -w '%{http_code}' "$BASE/health" || true)"
             echo " try #$i: /health => $code"
             if [ "$code" = "200" ]; then ok=1; break; fi
             sleep $((i*2))
@@ -74,25 +84,58 @@ jobs:
             exit 1
           fi
 
-          echo "Login with retry..."
+      - name: Login and get token (robust)
+        if: steps.timecheck.outputs.run == '1'
+        env:
+          BASE: ${{ secrets.VOLAI_BASE }}
+          EMAIL: ${{ secrets.VOLAI_EMAIL }}
+          PASSWORD: ${{ secrets.VOLAI_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="${BASE%/}"
+
+          echo "Login with retry (split code/body)..."
           TOK=""
           for i in {1..5}; do
-            RESP=$(curl -sS -m 20 -L -X POST "$BASE/login" \
+            tmp="$(mktemp)"
+            code="$(curl -sS -m 20 -L -X POST "$BASE/login" \
               -H "Content-Type: application/json" \
               -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" \
-              --retry 5 --retry-delay 2 --retry-all-errors || true)
-            TOK=$(echo "$RESP" | jq -r '.access_token')
-            if [ -n "${TOK:-}" ] && [ "$TOK" != "null" ]; then
-              echo " Token acquired."
-              break
+              -o "$tmp" -w '%{http_code}' || true)"
+            echo " login try #$i => code=$code"
+            if [ "$code" = "200" ]; then
+              # JSON本文からアクセストークン抽出（本文のみを jq に渡す）
+              TOK="$(jq -r 'try .access_token // empty' "$tmp" 2>/dev/null || true)"
+              if [ -n "${TOK:-}" ] && [ "$TOK" != "null" ]; then
+                echo " Token acquired."
+                break
+              else
+                echo " Token not found in body:"
+                cat "$tmp" || true
+              fi
+            else
+              echo " Non-200 response; body was:"
+              cat "$tmp" || true
             fi
-            echo " login retry #$i failed; sleeping..."
             sleep 3
           done
+
           if [ -z "${TOK:-}" ] || [ "$TOK" = "null" ]; then
             echo "Login failed (no token)"; exit 1
           fi
 
+          # 後続ステップで再利用
+          echo "TOK=$TOK" >> "$GITHUB_ENV"
+
+      - name: Run job (news_sentiment, window_hours=24)
+        if: steps.timecheck.outputs.run == '1'
+        env:
+          BASE: ${{ secrets.VOLAI_BASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="${BASE%/}"
           echo "Run job (news_sentiment, window_hours=24)"
           curl -sS -f -X POST "$BASE/ops/jobs/run?name=news_sentiment&window_hours=24" \
             -H "Authorization: Bearer $TOK" \
@@ -100,34 +143,32 @@ jobs:
             --retry 5 --retry-delay 2 --retry-all-errors \
             | tee /dev/stderr
 
-          # 後続ステップで再利用
-          echo "TOK=$TOK" >> $GITHUB_ENV
-
       # 追加ジョブ（任意）：前営業日で supply_demand を回す（週末スキップ）
       - name: Run supply_demand for previous business day (Toronto)
         if: steps.timecheck.outputs.run == '1'
         env:
           BASE: ${{ secrets.VOLAI_BASE }}
+        shell: bash
         run: |
           set -euo pipefail
           BASE="${BASE%/}"
 
           # 週末はジョブ自体をスキップ
-          DOW=$(TZ=America/Toronto date +%u)   # 1=Mon ... 7=Sun
+          DOW="$(TZ=America/Toronto date +%u)"   # 1=Mon ... 7=Sun
           if [ "$DOW" -ge 6 ]; then
             echo "Weekend in Toronto, skip supply_demand."; exit 0
           fi
 
           # 前営業日（祝日未考慮：月曜→金曜 / 火〜金→前日）
           if [ "$DOW" -eq 1 ]; then
-            DAY=$(TZ=America/Toronto date -d '3 days ago' +%F)
+            DAY="$(TZ=America/Toronto date -d '3 days ago' +%F)"
           else
-            DAY=$(TZ=America/Toronto date -d 'yesterday' +%F)
+            DAY="$(TZ=America/Toronto date -d 'yesterday' +%F)"
           fi
           echo "Target business day = $DAY"
 
           curl -sS -f -X POST "$BASE/ops/jobs/run?name=supply_demand&day=$DAY" \
-            -H "Authorization: Bearer ${{ env.TOK }}" \
+            -H "Authorization: Bearer $TOK" \
             -H "Content-Type: application/json" \
             --retry 5 --retry-delay 2 --retry-all-errors \
             | tee /dev/stderr
