@@ -1,41 +1,47 @@
-﻿# .gitignore
-
+﻿# --- Python / venv / OS ---
 venv/
 __pycache__/
-.env
 *.pyc
 .DS_Store
+Thumbs.db
 
-# ログとバックアップ
+# --- Env / Secrets ---
+.env
+.env.bak
+
+# --- Logs / Backups / Temp ---
 logs/
 backups/
 *.log
-.env.bak
-
-# エディタ/IDE
-.vscode/
-.idea/
-
-# テスト/カバレッジ
-.pytest_cache/
-.coverage
-htmlcov/
-
-# OSごみ
-Thumbs.db
-
-# 一時/バックアップ
 *.bak
 *.old
 *.orig
 *.tmp
 
-# 単発成果物（必要なら）
-logs_summary.xlsx
-# build artifacts
+# --- Editor / IDE ---
+.vscode/
+.idea/
+
+# --- Test / Coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Build & data artifacts ---
 .cache/
 data/
 metrics/
-models/
-# local only
+
+# --- Model artifacts only (keep code under models/) ---
+# ※ models/ ディレクトリ自体は無視しない！
+models/**/__pycache__/
+models/**/*.pkl
+models/**/*.pkl.bak
+# ※ CSVは残す想定。もし不要なら下を有効化
+# models/**/*.csv
+
+# --- Global binary artifacts ---
 *.pkl
+
+# --- One-off artifacts (必要なら) ---
+logs_summary.xlsx
