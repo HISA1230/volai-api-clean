@@ -25,7 +25,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if (Test-Path requirements.txt) { pip install -r requirements.txt }
-          if (Test-Path requirements-dev.txt) { pip install -r requirements-dev.txt }
+          if (Test-Path requirements-dev.txt) {
+            pip install -r requirements-dev.txt
+          } else {
+            pip install pytest
+          }
+
+      - name: Sanity: show pytest version
+        shell: pwsh
+        run: python -m pytest --version
 
       - name: Prepare .env
         shell: pwsh
@@ -34,25 +42,10 @@ jobs:
           "FRED_API_KEY=${{ secrets.FRED_API_KEY }}" | Out-File -FilePath .env -Append -Encoding ascii
           "ALIGN_CALENDAR_UNION_FFILL=1"          | Out-File -FilePath .env -Append -Encoding ascii
 
-      # ここから追加（診断用）
-      - name: Debug env
+      - name: Collect-only (fail fast)
         shell: pwsh
-        run: |
-          python -V
-          echo "---- pytest.ini ----"
-          if (Test-Path pytest.ini) { Get-Content pytest.ini | %{ $_ } } else { echo "pytest.ini not found" }
-          echo "---- files ----"
-          git ls-files
-          echo "---- pip list (head) ----"
-          pip list | Select-Object -First 100
-
-      - name: Pytest collect-only (what will run?)
-        shell: pwsh
-        run: |
-          pytest --collect-only -q -k 'offline or schema' || exit 1
-      # ここまで追加
+        run: python -m pytest --collect-only -q -k "offline or schema"
 
       - name: Run tests (offline/schema only)
         shell: pwsh
-        run: |
-          pytest -vv -k 'offline or schema'
+        run: python -m pytest -q -k "offline or schema"
