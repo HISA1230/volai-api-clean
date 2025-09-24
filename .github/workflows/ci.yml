@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 on:
   push:
   pull_request:
@@ -22,13 +22,14 @@ jobs:
       - name: Install deps (runtime + dev)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
+          if exist requirements.txt ( pip install -r requirements.txt )
+          if exist requirements-dev.txt ( pip install -r requirements-dev.txt )
 
       - name: Prepare .env
         run: |
-          echo FMP_API_KEY=${{ secrets.FMP_API_KEY }} >> .env
-          echo FRED_API_KEY=${{ secrets.FRED_API_KEY }} >> .env
-          echo ALIGN_CALENDAR_UNION_FFILL=1 >> .env
+          echo FMP_API_KEY=${{ secrets.FMP_API_KEY }}>> .env
+          echo FRED_API_KEY=${{ secrets.FRED_API_KEY }}>> .env
+          echo ALIGN_CALENDAR_UNION_FFILL=1>> .env
 
-      - name: Run tests (offline + schema only)`n        run: pytest -q -k "offline or schema"
+      - name: Run tests (offline/schema only)
+        run: pytest -q -k "offline or schema"
