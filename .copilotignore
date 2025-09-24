@@ -1,0 +1,12 @@
+﻿.env
+*.pkl
+models/**/*.pkl
+models/**/*.pkl.bak
+models/metrics_history.csv
+logs/
+data/
+metrics/
+.cache/
+__pycache__/
+htmlcov/
+.pytest_cache/
