@@ -32,3 +32,10 @@ Thumbs.db
 
 # 単発成果物（必要なら）
 logs_summary.xlsx
+# build artifacts
+.cache/
+data/
+metrics/
+models/
+# local only
+*.pkl
