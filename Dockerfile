@@ -19,4 +19,4 @@ COPY . .
 EXPOSE 10000
 
 # まずは確実にAPIを起動（alembicは後で安定してから）
-CMD ["bash","-lc","uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["bash","-lc","uvicorn main_api:app --host 0.0.0.0 --port ${PORT:-8000}"]
