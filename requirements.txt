@@ -6,3 +6,5 @@ pandas
 scikit-learn
 python-dotenv
 pyyaml
+SQLAlchemy
+psycopg2-binary
