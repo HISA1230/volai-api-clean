@@ -81,7 +81,7 @@ def get_session() -> requests.Session:
     retry = Retry(
         total=3,
         backoff_factor=0.4,
-        status_forcelist=(429, 500, 502, 503, 504),
+        status_forcelist=(500, 502, 503, 504),
         allowed_methods=frozenset(["HEAD", "GET", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]),
         raise_on_status=False,
     )
@@ -287,6 +287,19 @@ else:
 # 基本設定
 # =========================
 SHOW_WEBHOOK_UI = (os.getenv("SHOW_WEBHOOK_UI", "1").lower() not in ("0","false","no","off"))
+
+# ===== auth flags (env: "0"でもTrue扱いにならないようにする) =====
+def env_true(key: str, default: str = "0") -> bool:
+    v = (os.getenv(key, default) or "").strip().lower()
+    return v in ("1", "true", "yes", "y", "on")
+
+API_REQUIRE_JWT = env_true("API_REQUIRE_JWT", "0")
+UI_LOGIN_ENABLE = env_true("UI_LOGIN_ENABLE", "0")
+AUTOLOGIN = env_true("AUTOLOGIN", "0")
+
+# ログインUIを出す条件（両方ONのときだけ）
+REQUIRE_AUTH = API_REQUIRE_JWT and UI_LOGIN_ENABLE
+
 st.set_page_config(page_title="Volatility AI UI", layout="wide")
 
 def set_query_params_safe(**params):
@@ -1212,119 +1225,87 @@ st.title("Volatility AI – Minimal UI")
 st.caption(f"API Base: {API} ｜ Swagger: {SWAGGER_URL}")
 
 with st.sidebar:
-    st.subheader("ログイン")
-    default_email = os.getenv("API_EMAIL", "test@example.com")
-    default_pass  = os.getenv("API_PASSWORD", "test1234")
-    email = st.text_input("Email", value=default_email, key="login_email")
-    password = st.text_input("Password", type="password", value=default_pass, key="login_password")
-    st.caption(f"🔌 API = {API} ｜ env.API_URL={os.getenv('API_URL','(unset)')}")
+    # ---- ログイン（必要なときだけ表示） ----
+    if REQUIRE_AUTH:
+        st.subheader("ログイン")
 
-    AUTOLOGIN_TOKEN = os.getenv("AUTOLOGIN_TOKEN") or os.getenv("ADMIN_TOKEN")
+        default_email = os.getenv("API_EMAIL", "test@example.com")
+        default_pass  = os.getenv("API_PASSWORD", "test1234")
+        email = st.text_input("Email", value=default_email, key="login_email")
+        password = st.text_input("Password", type="password", value=default_pass, key="login_password")
+        st.caption(f"🔌 API = {API} ｜ env.API_URL={os.getenv('API_URL','(unset)')}")
 
-    def try_autologin_once():
-        if st.session_state.get("_autologin_done"):
-            return
-        q = _qp()
-        flag = False
-        if q:
-            v = q.get("autologin")
-            if isinstance(v, list):
-                flag = ("1" in v) or (True in v)
-            elif isinstance(v, str):
-                flag = (v.lower() in ("1","true","yes"))
-            elif v is True:
-                flag = True
-        if not flag or not AUTOLOGIN_TOKEN:
-            st.session_state["_autologin_done"] = True
-            return
-        try:
-            data = req(
-                "POST", "/auth/magic_login",
-                json_data={"token": AUTOLOGIN_TOKEN, "email": email},
-                auth=False, timeout=(5, 20), retries=0
-            )
-            st.session_state["token"] = data.get("access_token")
-            st.session_state["me"] = req("GET", "/me", auth=True, timeout=(5, 20))
-            st.session_state["_autologin_done"] = True
-            st.success("自動ログインしました")
-        except Exception as e:
-            st.session_state["_autologin_done"] = True
-            st.info(f"自動ログイン失敗: {e}")
+        AUTOLOGIN_TOKEN = os.getenv("AUTOLOGIN_TOKEN") or os.getenv("ADMIN_TOKEN")
 
-    try_autologin_once()
+        def try_autologin_once():
+            if st.session_state.get("_autologin_done"):
+                return
 
-    cA, cB = st.columns(2)
-    if cA.button("ログイン"):
-        ok = False
-        data = None
-        try:
-            data = req(
-                "POST", "/login",
-                json_data={"email": email, "password": password},
-                auth=False, timeout=(10, 80), retries=0
-            )
-            ok = True
-        except requests.HTTPError as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            if status in (401, 403):
-                tok = (os.getenv("AUTOLOGIN_TOKEN") or os.getenv("ADMIN_TOKEN") or "").strip()
-                if tok:
-                    try:
-                        data = req(
-                            "POST", "/auth/magic_login",
-                            json_data={"token": tok},
-                            auth=False, timeout=(5, 20), retries=0
-                        )
-                        ok = True
-                    except requests.HTTPError as ee:
-                        stt = getattr(getattr(ee, "response", None), "status_code", None)
-                        if stt in (400, 422):
-                            try:
-                                data = req(
-                                    "POST", "/auth/magic_login",
-                                    json_data={"token": tok, "email": email},
-                                    auth=False, timeout=(5, 20), retries=0
-                                )
-                                ok = True
-                            except Exception as e3:
-                                st.error(f"magic_login 失敗: {e3}")
-                        else:
-                            msg = getattr(getattr(ee, "response", None), "text", "") or str(ee)
-                            st.error(f"magic_login 拒否（{stt}）。AUTOLOGIN_TOKEN が API と合っていません。詳細: {msg[:300]}")
-                    except Exception as e2:
-                        st.error(f"magic_login 実行エラー: {e2}")
-                else:
-                    st.error("認証失敗（401/403）。AUTOLOGIN_TOKEN が未設定です。/login 用のメール・パスワードを確認するか、正しいトークンを設定してください。")
-            else:
-                body = getattr(getattr(e, "response", None), "text", "") or str(e)
-                st.error(f"/login 失敗: {body[:300]}")
-        except requests.ReadTimeout:
-            st.error("ログインでタイムアウト。少し待って再実行してください。")
-        except Exception as e:
-            st.error(f"ログイン失敗: {e}")
-            st.code(traceback.format_exc())
+            q = _qp()
+            flag = False
+            if q:
+                v = q.get("autologin")
+                if isinstance(v, list):
+                    flag = ("1" in v) or (True in v)
+                elif isinstance(v, str):
+                    flag = (v.lower() in ("1", "true", "yes"))
+                elif v is True:
+                    flag = True
 
-        if ok and data:
-            st.session_state["token"] = data.get("access_token")
+            if not flag or not AUTOLOGIN_TOKEN:
+                st.session_state["_autologin_done"] = True
+                return
+
             try:
-                st.session_state["me"] = req("GET", "/me", auth=True, timeout=(5, 30))
-                st.success(f"ログイン成功: {st.session_state['me'].get('email','')}")
+                data = req(
+                    "POST", "/auth/magic_login",
+                    json_data={"token": AUTOLOGIN_TOKEN, "email": email},
+                    auth=False, timeout=(5, 20), retries=0
+                )
+                st.session_state["token"] = data.get("access_token")
+                st.session_state["me"] = req("GET", "/me", auth=True, timeout=(5, 20))
+                st.session_state["_autologin_done"] = True
+                st.success("自動ログインしました")
             except Exception as e:
-                st.session_state["me"] = None
-                st.warning(f"トークン取得は成功しましたが /me に失敗: {e}")
-        else:
-            st.info("ログインは完了しませんでした。エラーメッセージを確認してください。")
+                st.session_state["_autologin_done"] = True
+                st.info(f"自動ログイン失敗: {e}")
 
-    if cB.button("ログアウト"):
-        for k in ("token","me","_autologin_done"):
-            st.session_state[k] = None if k != "_autologin_done" else True
-        st.info("ログアウトしました")
-        try: st.cache_data.clear()
-        except Exception: pass
-        try: st.cache_resource.clear()
-        except Exception: pass
-        st.rerun()
+        try_autologin_once()
 
+        cA, cB = st.columns(2)
+
+        if cA.button("ログイン"):
+            try:
+                data = req(
+                    "POST", "/login",
+                    json_data={"email": email, "password": password},
+                    auth=False, timeout=(10, 40), retries=0
+                )
+                st.session_state["token"] = data.get("access_token")
+                st.session_state["me"] = req("GET", "/me", auth=True, timeout=(5, 30))
+                st.success("ログイン成功")
+            except Exception as e:
+                st.error(f"ログイン失敗: {e}")
+
+        if cB.button("ログアウト"):
+            for k in ("token", "me", "_autologin_done"):
+                st.session_state[k] = None if k != "_autologin_done" else True
+            st.info("ログアウトしました")
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+            try:
+                st.cache_resource.clear()
+            except Exception:
+                pass
+            st.rerun()
+
+    else:
+        st.info("ログイン不要モード（JWT無効）")
+        st.caption(f"🔌 API = {API} ｜ Swagger: {SWAGGER_URL}")
+
+    # ---- ここから下は常に表示（メンテナンス/診断/設定など） ----
     st.divider()
     st.subheader("メンテナンス")
 
@@ -1334,19 +1315,24 @@ with st.sidebar:
             st.rerun()
     with col_r2:
         if st.button("🧹 キャッシュ全消去 → 再実行", use_container_width=True):
-            try: st.cache_data.clear()
-            except Exception: pass
-            try: st.cache_resource.clear()
-            except Exception: pass
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+            try:
+                st.cache_resource.clear()
+            except Exception:
+                pass
             st.rerun()
 
-    # 診断はデフォルト閉じる（ログの羅列で画面が荒れないように）
     with st.expander("診断 / 完全ログ（SHAP・Models）", expanded=False):
         try:
             qp_dump = dict(_qp())
         except Exception:
             qp_dump = {}
-        st.caption("■ Query Params"); st.json(qp_dump)
+        st.caption("■ Query Params")
+        st.json(qp_dump)
+
         st.caption("■ 現在の上書き値（Session）")
         st.write({
             "shap_summary_override": st.session_state.get("shap_summary_override"),
@@ -1354,28 +1340,36 @@ with st.sidebar:
             "env.SHAP_SUMMARY_PATH_HINT": os.getenv("SHAP_SUMMARY_PATH_HINT"),
             "env.SHAP_MODELS_PATH_HINT":  os.getenv("SHAP_MODELS_PATH_HINT"),
         })
+
         st.text_input("SHAP API パス上書き", key="shap_summary_override",
                       placeholder="/explain/global_importance")
         st.text_input("Models API パス上書き", key="shap_models_override",
                       placeholder="/models")
         if st.button("上書きを適用（再描画）", key="btn_apply_shap_override"):
-            try: st.cache_data.clear()
-            except Exception: pass
-            try: st.cache_resource.clear()
-            except Exception: pass
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+            try:
+                st.cache_resource.clear()
+            except Exception:
+                pass
             st.toast("上書きを反映しました。再描画します。", icon="✅")
             st.rerun()
 
     st.subheader("Health / Ping")
     c1, c2 = st.columns(2)
+
     if c1.button("Health"):
         try:
-            st.json(req("GET","/health", auth=False, timeout=10))
+            st.json(req("GET", "/health", auth=False, timeout=10))
         except Exception as e:
             st.error(e)
+
+    # Ping はAPIによって無いので、まずは /health と同等にしておく（404や429を減らす）
     if c2.button("Ping"):
         try:
-            st.json(req("GET","/api/predict/ping", auth=False, timeout=10))
+            st.json(req("GET", "/health", auth=False, timeout=10))
         except Exception as e:
             st.error(e)
 
@@ -1413,6 +1407,7 @@ with st.sidebar:
                                "content": f"**{title}**\n{text}"}
                     r = requests.post(url, json=payload, timeout=5)
                     r.raise_for_status()
+
                 url = st.session_state.get("notify_webhook_url") or ""
                 if url:
                     _send_webhook(url, st.session_state.get("notify_title") or "VolAI 強シグナル", "通知テスト（接続確認）")
@@ -1421,6 +1416,7 @@ with st.sidebar:
                     st.warning("Webhook URL を入力してください")
             except Exception as e:
                 st.error(f"送信失敗: {e}")
+
 
 # =========================
 # 実行前 UI（フィルタ）＋ 自動更新UI
