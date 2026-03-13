@@ -500,6 +500,7 @@ def attach_time_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         df["_ts_utc"] = pd.NaT
         return df
+
     used = None
     for col in TS_CANDIDATES:
         if col in df.columns:
@@ -508,8 +509,10 @@ def attach_time_columns(df: pd.DataFrame) -> pd.DataFrame:
                 df["_ts_utc"] = s
                 used = col
                 break
+
     if "_ts_utc" not in df.columns:
         df["_ts_utc"] = pd.NaT
+
     try:
         tz = ZoneInfo("America/Toronto")
         df["_ts_et"] = df["_ts_utc"].dt.tz_convert(tz)
@@ -517,15 +520,16 @@ def attach_time_columns(df: pd.DataFrame) -> pd.DataFrame:
         df["_time_et"] = df["_ts_et"].dt.strftime("%H:%M")
     except Exception:
         pass
+
     st.session_state["last_ts_source"] = used
     st.session_state["last_ts_nonnull"] = int(df["_ts_utc"].notna().sum())
     st.session_state["last_ts_total"] = int(len(df))
     return df
 
-# --- 型/値チェック & 正規化（attach_time_columns の直後に追加） ---
-REQUIRED_LATEST = {
-    "pred_vol": float, "fake_rate": float, "confidence": float,
-}
+
+# --- 型/値チェック & 正規化 ---
+REQUIRED_LATEST = {"pred_vol": float, "fake_rate": float, "confidence": float}
+
 ALT_NAMES = {
     "pred_vol":  ["predicted_vol","vol_pred","volatility_pred","pv"],
     "fake_rate": ["fraud_rate","noise_rate","fr"],
@@ -534,6 +538,7 @@ ALT_NAMES = {
 
 def _ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
+
     # 別名→正規名
     for main, alts in ALT_NAMES.items():
         if main not in d.columns:
@@ -541,89 +546,72 @@ def _ensure_cols(df: pd.DataFrame) -> pd.DataFrame:
                 if a in d.columns:
                     d = d.rename(columns={a: main})
                     break
+
     # 必須列の作成 & 数値化
     for c in REQUIRED_LATEST:
         if c not in d.columns:
             d[c] = pd.NA
         d[c] = pd.to_numeric(d[c], errors="coerce")
+
     return d
 
 def sanitize_latest_df(df: pd.DataFrame) -> pd.DataFrame:
     d = _ensure_cols(df)
-    # 想定レンジにクリップ（0〜1）
     for c in ("pred_vol","fake_rate","confidence"):
         if c in d.columns:
             d[c] = d[c].clip(lower=0, upper=1)
     return d
 
-# ---- 最新取得（/api が404なら /predict に自動フォールバック） ----
-def fetch_latest(n: int, mode_live: bool=False) -> Tuple[pd.DataFrame, Optional[str]]:
+
+# ---- 最新取得（/api -> /predict fallback）----
+def fetch_latest(n: int, mode_live: bool = False) -> Tuple[pd.DataFrame, Optional[str]]:
     paths = ["/api/predict/latest", "/predict/latest"]
     params = {"n": int(n)}
     if mode_live:
         params["mode"] = "live"
+
     last_err = None
     for p in paths:
         try:
             res = req("GET", p, params=params, auth=False, timeout=20, quiet_httpcodes={404})
             df = pd.DataFrame(res)
+
             if df.empty:
                 return df, None
+
             df = sanitize_latest_df(df)
+
             for c in ("price","market_cap"):
                 if c in df.columns:
                     df[c] = pd.to_numeric(df[c], errors="coerce")
 
             df = attach_time_columns(df)
+
             cols = [c for c in [
-                "_ts_utc","ts_utc","_ts_et","_date_et","_time_et","time_band","sector","size",
-                "pred_vol","fake_rate","confidence","rec_action","symbols","comment","price","market_cap","symbol"
+                "_ts_utc","ts_utc","_ts_et","_date_et","_time_et",
+                "time_band","sector","size",
+                "pred_vol","fake_rate","confidence",
+                "rec_action","symbols","comment",
+                "price","market_cap","symbol"
             ] if c in df.columns]
-            return df[cols] if cols else df, None
+
+            return (df[cols] if cols else df), None
+
         except Exception as e:
             last_err = e
             continue
+
     return pd.DataFrame(), (str(last_err) if last_err else "not found")
 
-# ② fetch_logs（既定上限を 2000 に）
-    @st.cache_data(ttl=120)
-    def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Optional[str] = None) -> pd.DataFrame:
-        # ★まずは「確定の正解エンドポイント」だけ叩く（探索で429を増やさない）
-        candidates: List[str] = ["/api/predict/logs"]
 
-        # 任意：手動で上書きしたい時だけ追加（UI側で logs_path_override を使う場合）
-        override = (st.session_state.get("logs_path_override") or "").strip()
-        if override:
-            candidates = [override] + candidates
+# ---- ログ取得（確定の /api/predict/logs のみ。429で中断）----
+@st.cache_data(ttl=120)
+def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Optional[str] = None) -> pd.DataFrame:
+    candidates: List[str] = ["/api/predict/logs"]
 
-    candidates: List[str] = []
+    override = (st.session_state.get("logs_path_override") or "").strip()
     if override:
-        candidates.append(override)
-    candidates.extend(discovered)
-    candidates.extend([
-        "/predict/logs",
-        "/api/predict/logs",
-        "/predict/history",
-        "/api/predict/history",
-        "/logs",
-        "/api/logs",
-        "/api/v1/logs",
-    ])
-
-    # 正規化 & ノイズ除去
-    norm: List[str] = []
-    seen = set()
-    for c in candidates:
-        c = "/" + str(c).lstrip("/")
-        if c not in seen:
-            seen.add(c)
-            norm.append(c)
-    candidates = norm
-
-    BAD = {"login", "logout", "catalog", "blog", "logic"}
-    def _bad(p: str) -> bool:
-        return any(part in BAD for part in p.lower().split("/"))
-    candidates = [c for c in candidates if not _bad(c)]
+        candidates = [override] + candidates
 
     params: Dict[str, Any] = {"n": int(limit), "limit": int(limit)}
     if owner:
@@ -632,25 +620,15 @@ def fetch_latest(n: int, mode_live: bool=False) -> Tuple[pd.DataFrame, Optional[
         params["since"] = since_iso
 
     used_path: Optional[str] = None
-
-    # ★追加：最後に試したパス / 最後のエラーを記録する
-    last_error: str | None = None
-    last_tried: str | None = None
+    last_error: Optional[str] = None
+    last_tried: Optional[str] = None
 
     for base in candidates:
         for path in (base, base + "/"):
-            # --- GET 試行 ---
             try:
                 last_tried = path
+                data = req("GET", path, params=params, auth=False, timeout=30, quiet_httpcodes={404,405,422})
 
-                data = req(
-                    "GET",
-                    path,
-                    params=params,
-                    auth=False,
-                    timeout=30,
-                    quiet_httpcodes={404, 405, 422},
-                )
                 if isinstance(data, dict) and isinstance(data.get("items"), list):
                     data = data["items"]
 
@@ -659,10 +637,6 @@ def fetch_latest(n: int, mode_live: bool=False) -> Tuple[pd.DataFrame, Optional[
 
                 if not df.empty:
                     df = sanitize_latest_df(df)
-                    for c in ("price", "market_cap"):
-                        if c in df.columns:
-                            df[c] = pd.to_numeric(df[c], errors="coerce")
-
                     df = attach_time_columns(df)
 
                     cols = [c for c in [
@@ -671,41 +645,34 @@ def fetch_latest(n: int, mode_live: bool=False) -> Tuple[pd.DataFrame, Optional[
                         "pred_vol","fake_rate","confidence","rec_action","comment",
                         "price","market_cap"
                     ] if c in df.columns]
+
                     if cols:
                         df = df[cols]
+
                     if "_ts_utc" in df.columns:
                         df = df.sort_values("_ts_utc", ascending=False).reset_index(drop=True)
 
                 st.session_state["_logs_endpoint_used"] = used_path
                 st.session_state["_logs_endpoint_missing"] = False
                 st.session_state["_logs_endpoint_candidates"] = candidates
-                st.session_state["_logs_last_error"] = None
                 st.session_state["_logs_last_tried"] = last_tried
+                st.session_state["_logs_last_error"] = None
                 return df
 
             except requests.HTTPError as e:
                 last_error = f"HTTPError on {path}: {e}"
                 stt = getattr(getattr(e, "response", None), "status_code", None)
 
-                # ★429なら「探索を続けない」＝レート制限を悪化させない
                 if stt == 429:
-                    st.session_state["_logs_last_error"] = last_error
                     st.session_state["_logs_last_tried"] = path
+                    st.session_state["_logs_last_error"] = last_error
                     break
 
-                # --- 405 → POST 再試行 ---
                 if stt == 405:
                     try:
                         last_tried = f"{path} (POST)"
+                        data = req("POST", path, json_data=params, auth=False, timeout=30, quiet_httpcodes={404,405,422})
 
-                        data = req(
-                            "POST",
-                            path,
-                            json_data=params,
-                            auth=False,
-                            timeout=30,
-                            quiet_httpcodes={404, 405, 422},
-                        )
                         if isinstance(data, dict) and isinstance(data.get("items"), list):
                             data = data["items"]
 
@@ -714,10 +681,6 @@ def fetch_latest(n: int, mode_live: bool=False) -> Tuple[pd.DataFrame, Optional[
 
                         if not df.empty:
                             df = sanitize_latest_df(df)
-                            for c in ("price","market_cap"):
-                                if c in df.columns:
-                                    df[c] = pd.to_numeric(df[c], errors="coerce")
-
                             df = attach_time_columns(df)
 
                             cols = [c for c in [
@@ -726,38 +689,41 @@ def fetch_latest(n: int, mode_live: bool=False) -> Tuple[pd.DataFrame, Optional[
                                 "pred_vol","fake_rate","confidence","rec_action","comment",
                                 "price","market_cap"
                             ] if c in df.columns]
+
                             if cols:
                                 df = df[cols]
+
                             if "_ts_utc" in df.columns:
                                 df = df.sort_values("_ts_utc", ascending=False).reset_index(drop=True)
 
                         st.session_state["_logs_endpoint_used"] = used_path
                         st.session_state["_logs_endpoint_missing"] = False
                         st.session_state["_logs_endpoint_candidates"] = candidates
-                        st.session_state["_logs_last_error"] = None
                         st.session_state["_logs_last_tried"] = last_tried
+                        st.session_state["_logs_last_error"] = None
                         return df
 
                     except Exception as e2:
                         last_error = f"POST Exception on {path}: {type(e2).__name__}: {e2}"
                         continue
 
-                # 405以外のHTTPErrorは次へ
                 continue
 
             except Exception as e:
                 last_error = f"Exception on {path}: {type(e).__name__}: {e}"
                 continue
 
-    # どれも失敗
+    st.session_state["_logs_endpoint_used"] = used_path
     st.session_state["_logs_endpoint_missing"] = True
     st.session_state["_logs_endpoint_candidates"] = candidates
-    st.session_state["_logs_last_error"] = last_error
     st.session_state["_logs_last_tried"] = last_tried
+    st.session_state["_logs_last_error"] = last_error
     return pd.DataFrame()
 
+
 def resolve_target_date_for_filter(target_date_et: Optional[date], df_ref: pd.DataFrame) -> Optional[date]:
-    if target_date_et is not None: return target_date_et
+    if target_date_et is not None:
+        return target_date_et
     try:
         if "_ts_utc" in df_ref.columns and not df_ref["_ts_utc"].isna().all():
             tz = ZoneInfo("America/Toronto")
