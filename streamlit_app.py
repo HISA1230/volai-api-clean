@@ -628,12 +628,24 @@ def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Option
 
     used_path: Optional[str] = None
 
+    # ★追加：最後に試したパス / 最後のエラーを記録する
+    last_error: str | None = None
+    last_tried: str | None = None
+
     for base in candidates:
         for path in (base, base + "/"):
             # --- GET 試行 ---
             try:
-                data = req("GET", path, params=params, auth=False, timeout=30,
-                           quiet_httpcodes={404, 405, 422})
+                last_tried = path
+
+                data = req(
+                    "GET",
+                    path,
+                    params=params,
+                    auth=False,
+                    timeout=30,
+                    quiet_httpcodes={404, 405, 422},
+                )
                 if isinstance(data, dict) and isinstance(data.get("items"), list):
                     data = data["items"]
 
@@ -662,15 +674,27 @@ def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Option
                 st.session_state["_logs_endpoint_used"] = used_path
                 st.session_state["_logs_endpoint_missing"] = False
                 st.session_state["_logs_endpoint_candidates"] = candidates
+                st.session_state["_logs_last_error"] = None
+                st.session_state["_logs_last_tried"] = last_tried
                 return df
 
             except requests.HTTPError as e:
+                last_error = f"HTTPError on {path}: {e}"
                 stt = getattr(getattr(e, "response", None), "status_code", None)
+
                 # --- 405 → POST 再試行 ---
                 if stt == 405:
                     try:
-                        data = req("POST", path, json_data=params, auth=False, timeout=30,
-                                   quiet_httpcodes={404, 405, 422})
+                        last_tried = f"{path} (POST)"
+
+                        data = req(
+                            "POST",
+                            path,
+                            json_data=params,
+                            auth=False,
+                            timeout=30,
+                            quiet_httpcodes={404, 405, 422},
+                        )
                         if isinstance(data, dict) and isinstance(data.get("items"), list):
                             data = data["items"]
 
@@ -699,17 +723,26 @@ def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Option
                         st.session_state["_logs_endpoint_used"] = used_path
                         st.session_state["_logs_endpoint_missing"] = False
                         st.session_state["_logs_endpoint_candidates"] = candidates
+                        st.session_state["_logs_last_error"] = None
+                        st.session_state["_logs_last_tried"] = last_tried
                         return df
-                    except Exception:
+
+                    except Exception as e2:
+                        last_error = f"POST Exception on {path}: {type(e2).__name__}: {e2}"
                         continue
-                else:
-                    continue
-            except Exception:
+
+                # 405以外のHTTPErrorは次へ
+                continue
+
+            except Exception as e:
+                last_error = f"Exception on {path}: {type(e).__name__}: {e}"
                 continue
 
     # どれも失敗
     st.session_state["_logs_endpoint_missing"] = True
     st.session_state["_logs_endpoint_candidates"] = candidates
+    st.session_state["_logs_last_error"] = last_error
+    st.session_state["_logs_last_tried"] = last_tried
     return pd.DataFrame()
 
 def resolve_target_date_for_filter(target_date_et: Optional[date], df_ref: pd.DataFrame) -> Optional[date]:
