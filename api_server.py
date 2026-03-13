@@ -112,3 +112,25 @@ def latest(n: int = 100, mode: str | None = None):
 @app.get("/api/predict/ping")
 def ping():
     return {"ok": True, "ts": datetime.utcnow().isoformat() + "Z"}
+
+@app.get("/api/predict/logs")
+def predict_logs(n: int = 2000, limit: int = 2000, owner: str | None = None):
+    # まずは UI 表示確認用のダミー
+    now = datetime.utcnow().isoformat() + "Z"
+    who = owner or "学也H"
+    rows = [
+        {
+            "ts_utc": now,
+            "owner": who,
+            "time_band": "A",
+            "sector": "tech",
+            "size": "Small",
+            "symbol": "NVDA",
+            "pred_vol": 0.012,
+            "fake_rate": 0.24,
+            "confidence": 0.68,
+            "rec_action": "WATCH",
+            "comment": "ログ表示のダミー（監査ログの形の確認用）",
+        }
+    ]
+    return rows
