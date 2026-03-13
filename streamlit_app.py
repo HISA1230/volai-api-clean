@@ -632,7 +632,7 @@ def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Option
         for path in (base, base + "/"):
             # --- GET 試行 ---
             try:
-                data = req("GET", path, params=params, auth=True, timeout=30,
+                data = req("GET", path, params=params, auth=False, timeout=30,
                            quiet_httpcodes={404, 405, 422})
                 if isinstance(data, dict) and isinstance(data.get("items"), list):
                     data = data["items"]
@@ -669,7 +669,7 @@ def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Option
                 # --- 405 → POST 再試行 ---
                 if stt == 405:
                     try:
-                        data = req("POST", path, json_data=params, auth=True, timeout=30,
+                        data = req("POST", path, json_data=params, auth=False, timeout=30,
                                    quiet_httpcodes={404, 405, 422})
                         if isinstance(data, dict) and isinstance(data.get("items"), list):
                             data = data["items"]
