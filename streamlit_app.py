@@ -1366,6 +1366,25 @@ with st.sidebar:
         st.caption("■ Query Params")
         st.json(qp_dump)
 
+        # ===== Logs diagnostics (last tried / last error) =====
+        st.caption("■ Logs Debug")
+        st.write({
+            "_logs_endpoint_used": st.session_state.get("_logs_endpoint_used"),
+            "_logs_endpoint_missing": st.session_state.get("_logs_endpoint_missing"),
+            "_logs_last_tried": st.session_state.get("_logs_last_tried"),
+            "_logs_last_error": st.session_state.get("_logs_last_error"),
+        })
+
+        # ===== Logs candidates (first 20) =====
+        st.caption("■ Logs candidates (first 20)")
+        cands = st.session_state.get("_logs_endpoint_candidates", None)
+        if cands is None:
+            st.write("(candidates not set yet)")
+        elif isinstance(cands, list) and len(cands) == 0:
+            st.write("(candidates = [])")
+        else:
+            st.write(cands[:20] if isinstance(cands, list) else cands)
+
         st.caption("■ 現在の上書き値（Session）")
         st.write({
             "shap_summary_override": st.session_state.get("shap_summary_override"),
@@ -1374,10 +1393,16 @@ with st.sidebar:
             "env.SHAP_MODELS_PATH_HINT":  os.getenv("SHAP_MODELS_PATH_HINT"),
         })
 
-        st.text_input("SHAP API パス上書き", key="shap_summary_override",
-                      placeholder="/explain/global_importance")
-        st.text_input("Models API パス上書き", key="shap_models_override",
-                      placeholder="/models")
+        st.text_input(
+            "SHAP API パス上書き",
+            key="shap_summary_override",
+            placeholder="/explain/global_importance"
+        )
+        st.text_input(
+            "Models API パス上書き",
+            key="shap_models_override",
+            placeholder="/models"
+        )
         if st.button("上書きを適用（再描画）", key="btn_apply_shap_override"):
             try:
                 st.cache_data.clear()
