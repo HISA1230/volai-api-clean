@@ -586,10 +586,15 @@ def fetch_latest(n: int, mode_live: bool=False) -> Tuple[pd.DataFrame, Optional[
     return pd.DataFrame(), (str(last_err) if last_err else "not found")
 
 # ② fetch_logs（既定上限を 2000 に）
-@st.cache_data(ttl=120)
-def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Optional[str] = None) -> pd.DataFrame:
-    override = (st.session_state.get("logs_path_override") or "").strip()
-    discovered = discover_log_endpoints(API)
+    @st.cache_data(ttl=120)
+    def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Optional[str] = None) -> pd.DataFrame:
+        # ★まずは「確定の正解エンドポイント」だけ叩く（探索で429を増やさない）
+        candidates: List[str] = ["/api/predict/logs"]
+
+        # 任意：手動で上書きしたい時だけ追加（UI側で logs_path_override を使う場合）
+        override = (st.session_state.get("logs_path_override") or "").strip()
+        if override:
+            candidates = [override] + candidates
 
     candidates: List[str] = []
     if override:
@@ -681,6 +686,12 @@ def fetch_logs(limit: int = 2000, owner: Optional[str] = None, since_iso: Option
             except requests.HTTPError as e:
                 last_error = f"HTTPError on {path}: {e}"
                 stt = getattr(getattr(e, "response", None), "status_code", None)
+
+                # ★429なら「探索を続けない」＝レート制限を悪化させない
+                if stt == 429:
+                    st.session_state["_logs_last_error"] = last_error
+                    st.session_state["_logs_last_tried"] = path
+                    break
 
                 # --- 405 → POST 再試行 ---
                 if stt == 405:
