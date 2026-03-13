@@ -1777,12 +1777,18 @@ params_summary = {
     "limit": int(sum_limit),
 }
 
-if use_client_agg:
-    df_sum, src_sum = build_summary_fallback_from_logs(params_summary)
+run_summary = st.button("サマリーを取得（押した時だけ実行）", key="btn_run_summary")
+
+if not run_summary:
+    df_sum, src_sum = pd.DataFrame(), "not-run"
+    st.info("サマリーは未取得です。必要な時だけ上のボタンを押してください。")
 else:
-    df_sum, src_sum = fetch_logs_summary_api(params_summary)
-    if df_sum.empty:
+    if use_client_agg:
         df_sum, src_sum = build_summary_fallback_from_logs(params_summary)
+    else:
+        df_sum, src_sum = fetch_logs_summary_api(params_summary)
+        if df_sum.empty:
+            df_sum, src_sum = build_summary_fallback_from_logs(params_summary)
 
 st.caption(f"summary source: {src_sum} ｜ 期間: {start_d} 〜 {end_d}（ET）")
 if df_sum is not None and not df_sum.empty:
