@@ -1,10 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import subprocess
 import sys
 import os
-from typing import List
+from typing import List, Optional, Dict, Any
+from datetime import datetime
 
 import pandas as pd
 from fastapi import FastAPI
@@ -21,24 +22,133 @@ STATIC_DIR = os.path.join(os.getcwd(), "app", "static")
 if os.path.isdir(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+
+# =========================
+# Pydantic models
+# =========================
 class PredictResponse(BaseModel):
     horizon: int
     n: int
     predictions: List[float]
+
+
+# UI が期待する “latest” の形（緩め：dict返却でもOKだが、ここでは型を用意）
+class LatestItem(BaseModel):
+    ts_utc: str
+    time_band: str
+    sector: str
+    size: str
+    symbol: str
+    pred_vol: float
+    fake_rate: float
+    confidence: float
+    rec_action: str
+    comment: str
+
+
+# ログ（将来DB化する前の最小）
+class LogItem(BaseModel):
+    ts_utc: str
+    owner: str
+    time_band: str
+    sector: str
+    size: str
+    symbol: str
+    pred_vol: float
+    fake_rate: float
+    confidence: float
+    rec_action: str
+    comment: str
+
 
 class ModelService:
     def __init__(self):
         self.ready = False
 
     def predict(self, X: pd.DataFrame) -> List[float]:
+        # TODO: ここを本物のモデル推論に置き換える
         return [0.0] * len(X)
+
 
 model_svc = ModelService()
 
+
+# =========================
+# Helpers
+# =========================
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat()
+
+
+def _dummy_latest(n: int = 100) -> List[Dict[str, Any]]:
+    """DBが空のとき UI に表示を出すためのダミー（最小2件）"""
+    now = _now_iso()
+    rows = [
+        {
+            "ts_utc": now,
+            "time_band": "A",
+            "sector": "tech",
+            "size": "Small",
+            "symbol": "NVDA",
+            "pred_vol": 0.012,
+            "fake_rate": 0.24,
+            "confidence": 0.68,
+            "rec_action": "WATCH",
+            "comment": "DBが空のためダミー表示（確認用）",
+        },
+        {
+            "ts_utc": now,
+            "time_band": "A",
+            "sector": "energy",
+            "size": "Mid",
+            "symbol": "XOM",
+            "pred_vol": 0.010,
+            "fake_rate": 0.18,
+            "confidence": 0.72,
+            "rec_action": "WATCH",
+            "comment": "DBが空のためダミー表示（確認用）",
+        },
+    ]
+    # nが小さければ切る
+    return rows[: max(1, min(int(n), 1000))]
+
+
+# =========================
+# Routes
+# =========================
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
+
+# ---- UI が叩くエンドポイント（ここが今回の追加） ----
+@app.get("/api/predict/latest", response_model=List[LatestItem], tags=["api"])
+def api_predict_latest(n: int = 100, mode: Optional[str] = None):
+    """
+    UI 用：最新予測を返す（まずはダミー）。
+    将来: DB から SELECT、または推論結果を返す。
+    """
+    # 現段階では DB が空なので常にダミー
+    return _dummy_latest(n=n)
+
+
+@app.get("/api/predict/ping", tags=["api"])
+def api_predict_ping():
+    return {"status": "ok", "ts_utc": _now_iso()}
+
+
+@app.get("/api/predict/logs", response_model=List[LogItem], tags=["api"])
+def api_predict_logs(n: int = 2000, limit: int = 2000, owner: Optional[str] = None):
+    """
+    UI 用：ログ一覧（当面は空 or ダミー）。
+    将来: DB の prediction_log などから返す。
+    """
+    # まずは空（UI側は「まだログがない」表示になる）
+    # ダミーを入れたいなら return で1件返してもOK
+    return []
+
+
+# ---- 既存の feature/predict ルート（あなたの元コードを維持） ----
 @app.get("/features/debug")
 def features_debug(start: str | None = None, end: str | None = None):
     fb = FeatureBuilder()
@@ -85,6 +195,7 @@ def features_debug(start: str | None = None, end: str | None = None):
             })
     return {"features": out}
 
+
 @app.get("/predict", response_model=PredictResponse)
 def predict(symbol: str = "SPY", horizon: int = 1, start: str | None = None, end: str | None = None):
     fb = FeatureBuilder()
@@ -104,8 +215,8 @@ def predict(symbol: str = "SPY", horizon: int = 1, start: str | None = None, end
     yhat = model_svc.predict(wide)
     return PredictResponse(horizon=horizon, n=len(yhat), predictions=yhat)
 
-# --- Re-added feature endpoints ---
 
+# --- Re-added feature endpoints ---
 @app.get("/features/last")
 def features_last(start: str | None = None, end: str | None = None):
     fb = FeatureBuilder()
@@ -125,10 +236,12 @@ def features_last(start: str | None = None, end: str | None = None):
     cols = ["date"] + list(wide.columns)
     return {"rows": 1, "columns": cols, "data": [rec]}
 
+
 @app.get("/features/last_flat")
 def features_last_flat(start: str | None = None, end: str | None = None):
     # 仕様は last と同じフラット行を返す
     return features_last(start=start, end=end)
+
 
 @app.get("/features/schema")
 def features_schema():
@@ -146,12 +259,14 @@ def features_schema():
         pass
     return {"count": len(feats), "features": feats, "model_columns": []}
 
+
 @app.get("/features/preview")
 def features_preview(start: str | None = None, end: str | None = None):
     out = features_last(start=start, end=end)
     if isinstance(out, dict) and "data" not in out:
         out["data"] = []
     return out
+
 
 @app.post("/train/trigger")
 def train_trigger():
