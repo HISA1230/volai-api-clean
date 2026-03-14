@@ -1707,38 +1707,49 @@ else:
     st.caption(f"{len(df_f)}/{len(base)} 行（フィルタ後）" + (" ｜ " + " / ".join(notes) if notes else ""))
     st.dataframe(_to_jp_table(df_f), use_container_width=True)
           
-
-
 # =========================
-# ログ・サマリー（参考・ヒートマップ） — 先頭に配置／日本語表
+# ログ・サマリー（参考・ヒートマップ） — ボタンを押した時だけ実行
 # =========================
 st.markdown("---")
 st.subheader("ログ・サマリー（参考・ヒートマップ）")
 
 # 期間プリセット＋手入力
-def _week_monday(date_et: date) -> date: return date_et - timedelta(days=date_et.weekday())
-def _week_sunday(date_et: date) -> date: return _week_monday(date_et) + timedelta(days=6)
-def _month_first(date_et: date) -> date: return date_et.replace(day=1)
+def _week_monday(date_et: date) -> date:
+    return date_et - timedelta(days=date_et.weekday())
+
+def _week_sunday(date_et: date) -> date:
+    return _week_monday(date_et) + timedelta(days=6)
+
+def _month_first(date_et: date) -> date:
+    return date_et.replace(day=1)
+
 def _month_last(date_et: date) -> date:
     if date_et.month == 12:
-        nxt = date_et.replace(year=date_et.year+1, month=1, day=1)
+        nxt = date_et.replace(year=date_et.year + 1, month=1, day=1)
     else:
-        nxt = date_et.replace(month=date_et.month+1, day=1)
+        nxt = date_et.replace(month=date_et.month + 1, day=1)
     return nxt - timedelta(days=1)
 
 col_sumA, col_sumB, col_sumC = st.columns([1.2, 1.3, 1.0])
 with col_sumA:
-    use_client_agg = st.checkbox("APIを使わずログから集計する", value=False,
-                                 help="ONで /predict/logs/summary を使わず、/predict/logs を取得してUI側で集計。")
+    use_client_agg = st.checkbox(
+        "APIを使わずログから集計する",
+        value=False,
+        help="ONで /predict/logs/summary を使わず、/predict/logs を取得してUI側で集計。"
+    )
 with col_sumB:
-    sum_limit = st.number_input("サマリー集計に使うログ上限", min_value=100, max_value=10000, value=2000, step=100)
+    sum_limit = st.number_input(
+        "サマリー集計に使うログ上限",
+        min_value=100, max_value=10000, value=2000, step=100
+    )
 with col_sumC:
     apply_owner_in_summary = st.checkbox("サマリーにもオーナーを適用", value=False)
 
 preset = st.radio(
     "期間プリセット",
     options=["今日", "週末締めの一週間（今週）", "月末締めの一か月（今月）", "手入力（カスタム）"],
-    horizontal=True, index=0,
+    horizontal=True,
+    index=0,
     help="週末＝日曜締め、月末＝カレンダー月の末日"
 )
 
@@ -1753,7 +1764,7 @@ if preset == "手入力（カスタム）":
     with custom_c1:
         start_d_user = st.date_input("開始日（ET）", value=today_et)
     with custom_c2:
-        end_d_user   = st.date_input("終了日（ET）", value=today_et)
+        end_d_user = st.date_input("終了日（ET）", value=today_et)
 
 if preset == "今日":
     start_d, end_d = today_et, today_et
@@ -1763,26 +1774,37 @@ elif preset == "月末締めの一か月（今月）":
     start_d, end_d = _month_first(today_et), _month_last(today_et)
 else:
     start_d = start_d_user or today_et
-    end_d   = end_d_user   or today_et
+    end_d = end_d_user or today_et
+
 if start_d > end_d:
     start_d, end_d = end_d, start_d
 
 params_summary = {
-    "owner": (st.session_state.get("owner_pick") or "").strip() or None if apply_owner_in_summary else None,
+    "owner": ((st.session_state.get("owner_pick") or "").strip() or None) if apply_owner_in_summary else None,
     "tz_offset": tz_offset_min,
     "time_start": "04:30",
-    "time_end":   "20:00",
+    "time_end": "20:00",
     "start": start_d.isoformat(),
-    "end":   end_d.isoformat(),
+    "end": end_d.isoformat(),
     "limit": int(sum_limit),
 }
+
+# ★ここがポイント：押してない時でも変数を必ず定義しておく
+df_sum = pd.DataFrame()
+src_sum = "not-run"
 
 run_summary = st.button("サマリーを取得（押した時だけ実行）", key="btn_run_summary")
 
 if not run_summary:
-    df_sum, src_sum = pd.DataFrame(), "not-run"
     st.info("サマリーは未取得です。必要な時だけ上のボタンを押してください。")
 else:
+    # （任意）毎回必ず取り直したい場合だけ：キャッシュを消す
+    # 429対策としては消さない方が安全なので、基本コメントのままでOK
+    # try:
+    #     st.cache_data.clear()
+    # except Exception:
+    #     pass
+
     if use_client_agg:
         df_sum, src_sum = build_summary_fallback_from_logs(params_summary)
     else:
@@ -1790,19 +1812,21 @@ else:
         if df_sum.empty:
             df_sum, src_sum = build_summary_fallback_from_logs(params_summary)
 
-st.caption(f"summary source: {src_sum} ｜ 期間: {start_d} 〜 {end_d}（ET）")
-if df_sum is not None and not df_sum.empty:
-    st.dataframe(_to_jp_summary_table(df_sum), use_container_width=True)
-    if alt is not None and {"date_et","time_band","avg_pred_vol"}.issubset(df_sum.columns):
-        chart = alt.Chart(df_sum).mark_rect().encode(
-            x=alt.X('time_band:N', sort=None),
-            y=alt.Y('date_et:O', sort='-x'),
-            tooltip=['date_et','time_band','avg_pred_vol','avg_fake_rate','avg_confidence'],
-            color='avg_pred_vol:Q',
-        ).properties(width='container', height=300)
-        st.altair_chart(chart, use_container_width=True)
-else:
-    st.info("サマリーは取得できませんでした。")
+    st.caption(f"summary source: {src_sum} ｜ 期間: {start_d} 〜 {end_d}（ET）")
+
+    if df_sum is not None and not df_sum.empty:
+        st.dataframe(_to_jp_summary_table(df_sum), use_container_width=True)
+
+        if alt is not None and {"date_et", "time_band", "avg_pred_vol"}.issubset(df_sum.columns):
+            chart = alt.Chart(df_sum).mark_rect().encode(
+                x=alt.X("time_band:N", sort=None),
+                y=alt.Y("date_et:O", sort="-x"),
+                tooltip=["date_et", "time_band", "avg_pred_vol", "avg_fake_rate", "avg_confidence"],
+                color="avg_pred_vol:Q",
+            ).properties(width="container", height=300)
+            st.altair_chart(chart, use_container_width=True)
+    else:
+        st.info("サマリーは取得できませんでした。")
 
 # =========================
 # ログ一覧（確認用） — 日本語表
@@ -1829,14 +1853,28 @@ else:
     st.info("まだログを取得していません（または0件）。『ログを取得』を押してください。")
 
 # =========================
-# SHAP サマリー（グローバル重要度） — 最後に配置／日本語表
+# SHAP サマリー（グローバル重要度） — ボタンを押した時だけAPI呼び出し
 # =========================
 st.markdown("---")
 st.subheader("SHAP サマリー（グローバル重要度）")
 
-models, models_src = fetch_models_list()
-lc, rc = st.columns([2, 1])
+# ★表示だけでは叩かない（初期値）
+st.session_state.setdefault("shap_models_cached", [])
+st.session_state.setdefault("shap_models_src", "not-run")
 
+colM1, colM2 = st.columns([1.2, 2.0])
+with colM1:
+    if st.button("モデル一覧を取得（押した時だけ）", key="btn_fetch_models"):
+        models, models_src = fetch_models_list()
+        st.session_state["shap_models_cached"] = models
+        st.session_state["shap_models_src"] = models_src
+
+with colM2:
+    st.caption(f"models source: {st.session_state.get('shap_models_src')}")
+
+models = st.session_state.get("shap_models_cached", [])
+
+lc, rc = st.columns([2, 1])
 with lc:
     if models:
         idx0 = 0
@@ -1844,78 +1882,9 @@ with lc:
             idx0 = models.index(st.session_state["shap_model_pick"])
         pick = st.selectbox("モデル選択", options=models, index=idx0, key="shap_model_pick")
     else:
-        st.info("モデル一覧が取得できなかったため、手入力で指定してください。")
+        st.info("モデル一覧は未取得です。必要なら上の『モデル一覧を取得』を押すか、手入力してください。")
         pick = st.text_input("モデル名（手入力）", key="shap_model_pick", placeholder="例）best, prod, v1.2 など")
 
 with rc:
     topk = st.number_input("Top-K", 1, 200, value=int(st.session_state.get("shap_topk", 30)), key="shap_topk")
 
-_owner_for_shap = (st.session_state.get("owner_pick") or "").strip() or None
-
-col_btn1, col_btn2, col_btn3 = st.columns([1.2, 1.0, 1.0])
-with col_btn1:
-    if st.button("SHAP を取得", key="btn_fetch_shap"):
-        if not (pick or "").strip():
-            st.warning("モデル名を入力または選択してください。")
-        else:
-            df_shap, shap_src = fetch_shap_summary_api(
-                model=str(pick).strip(), owner=_owner_for_shap, topk=int(topk)
-            )
-            st.session_state["shap_summary_src"] = shap_src
-            if df_shap.empty:
-                st.warning("SHAP サマリーは0行でした。パス上書きまたはファイルアップロードを試してください。")
-            else:
-                st.session_state["shap_summary_df"] = df_shap
-                st.success(f"{len(df_shap)} 行を取得: {shap_src}")
-
-with col_btn2:
-    if st.button("CSV として保存", key="btn_shap_save_csv"):
-        df = st.session_state.get("shap_summary_df", pd.DataFrame())
-        if df is None or df.empty:
-            st.info("SHAP データがありません。先に取得するか、ファイルをアップロードしてください。")
-        else:
-            csv = normalize_shap_summary(df).to_csv(index=False).encode("utf-8")
-            st.download_button("ダウンロード: shap_summary.csv", data=csv, file_name="shap_summary.csv", mime="text/csv")
-
-with col_btn3:
-    if st.button("Excel として保存", key="btn_shap_save_xlsx"):
-        df = st.session_state.get("shap_summary_df", pd.DataFrame())
-        if df is None or df.empty:
-            st.info("SHAP データがありません。先に取得するか、ファイルをアップロードしてください。")
-        else:
-            try:
-                buf = io.BytesIO()
-                with pd.ExcelWriter(buf, engine="openpyxl") as w:
-                    normalize_shap_summary(df).to_excel(w, index=False, sheet_name="shap_summary")
-                buf.seek(0)
-                st.download_button("ダウンロード: shap_summary.xlsx", data=buf.getvalue(),
-                                   file_name="shap_summary.xlsx",
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            except Exception as e:
-                st.error(f"Excel 書き出しに失敗: {e}")
-
-up = st.file_uploader("SHAP サマリー（CSV/JSON/TSV）をアップロード（APIが無い場合の代替）",
-                      type=["csv","json","tsv"])
-if up is not None:
-    try:
-        if up.name.lower().endswith(".json"):
-            raw = json.loads(up.read().decode("utf-8", errors="ignore"))
-            rows = _extract_list_like_any(raw)
-            df_up = normalize_shap_summary(pd.DataFrame(rows))
-        else:
-            sep = "\t" if up.name.lower().endswith(".tsv") else ","
-            df_up = pd.read_csv(up, sep=sep)
-            df_up = normalize_shap_summary(df_up)
-        if not df_up.empty:
-            st.session_state["shap_summary_df"] = df_up
-            st.session_state["shap_summary_src"] = "upload"
-            st.success(f"アップロードから {len(df_up)} 行を読み込みました。")
-        else:
-            st.warning("アップロード内容から有効な行が見つかりませんでした。")
-    except Exception as e:
-        st.error(f"読み込みに失敗しました: {e}")
-
-df_shap_show = st.session_state.get("shap_summary_df", pd.DataFrame())
-if df_shap_show is not None and not df_shap_show.empty:
-    st.caption(f"source: {st.session_state.get('shap_summary_src','')}")
-    st.dataframe(_to_jp_shap_table(df_shap_show), use_container_width=True)
