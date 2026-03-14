@@ -1397,14 +1397,19 @@ with st.sidebar:
 
     if c1.button("Health"):
         try:
-            st.json(req("GET", "/health", auth=False, timeout=10))
+            # 429 は「混雑中」扱いで赤エラーにしない
+            st.json(req("GET", "/health", auth=False, timeout=10, quiet_httpcodes={429}))
+        except requests.HTTPError:
+            st.warning("Health: 混雑中（HTTP 429）。少し待ってからもう一度。")
         except Exception as e:
             st.error(e)
 
     # Ping はAPIによって無いので、まずは /health と同等にしておく（404や429を減らす）
     if c2.button("Ping"):
         try:
-            st.json(req("GET", "/health", auth=False, timeout=10))
+            st.json(req("GET", "/health", auth=False, timeout=10, quiet_httpcodes={429}))
+        except requests.HTTPError:
+            st.warning("Ping: 混雑中（HTTP 429）。少し待ってからもう一度。")
         except Exception as e:
             st.error(e)
 
@@ -1429,29 +1434,37 @@ with st.sidebar:
     if SHOW_WEBHOOK_UI:
         st.divider()
         st.subheader("通知（Webhook）")
-        st.checkbox("Webhook通知を有効化", key="notify_enable",
-                    value=st.session_state.get("notify_enable", False))
-        st.text_input("Webhook URL", key="notify_webhook_url",
-                      placeholder="https://discord.com/api/webhooks/....")
+        st.checkbox(
+            "Webhook通知を有効化",
+            key="notify_enable",
+            value=st.session_state.get("notify_enable", False),
+        )
+        st.text_input(
+            "Webhook URL",
+            key="notify_webhook_url",
+            placeholder="https://discord.com/api/webhooks/....",
+        )
         st.text_input("通知タイトル", key="notify_title", placeholder="VolAI 強シグナル")
 
         if st.button("テスト通知を送信", key="btn_notify_test"):
             try:
                 def _send_webhook(url, title, text):
-                    payload = {"text": f"*{title}*\n{text}",
-                               "content": f"**{title}**\n{text}"}
+                    payload = {"text": f"*{title}*\n{text}", "content": f"**{title}**\n{text}"}
                     r = requests.post(url, json=payload, timeout=5)
                     r.raise_for_status()
 
                 url = st.session_state.get("notify_webhook_url") or ""
                 if url:
-                    _send_webhook(url, st.session_state.get("notify_title") or "VolAI 強シグナル", "通知テスト（接続確認）")
+                    _send_webhook(
+                        url,
+                        st.session_state.get("notify_title") or "VolAI 強シグナル",
+                        "通知テスト（接続確認）",
+                    )
                     st.success("Webhookに送信しました ✅")
                 else:
                     st.warning("Webhook URL を入力してください")
             except Exception as e:
                 st.error(f"送信失敗: {e}")
-
 
 # =========================
 # 実行前 UI（フィルタ）＋ 自動更新UI
