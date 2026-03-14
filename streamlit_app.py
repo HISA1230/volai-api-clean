@@ -1871,33 +1871,89 @@ else:
 st.markdown("---")
 st.subheader("SHAP サマリー（グローバル重要度）")
 
-# ★表示だけでは叩かない（初期値）
+# ★初期値（表示だけでは叩かない）
 st.session_state.setdefault("shap_models_cached", [])
 st.session_state.setdefault("shap_models_src", "not-run")
+st.session_state.setdefault("shap_model_pick", "")
+st.session_state.setdefault("shap_topk", 30)
+
+# ★このブロック内で必ず定義されるように初期化
+models: List[str] = st.session_state.get("shap_models_cached", []) or []
+models_src: str = st.session_state.get("shap_models_src", "not-run") or "not-run"
 
 colM1, colM2 = st.columns([1.2, 2.0])
+
 with colM1:
     if st.button("モデル一覧を取得（押した時だけ）", key="btn_fetch_models"):
-        models, models_src = fetch_models_list()
-        st.session_state["shap_models_cached"] = models
-        st.session_state["shap_models_src"] = models_src
+        try:
+            models_new, models_src_new = fetch_models_list()
+            models_new = models_new or []
+            models_src_new = models_src_new or "api:none"
+
+            # セッションに保存
+            st.session_state["shap_models_cached"] = models_new
+            st.session_state["shap_models_src"] = models_src_new
+
+            # 直後の表示用にも反映
+            models = models_new
+            models_src = models_src_new
+
+            if models:
+                st.success(f"モデル一覧: {len(models)} 件（{models_src}）")
+            else:
+                st.warning(f"モデル一覧は0件でした（{models_src}）")
+
+        except requests.HTTPError as e:
+            # 429など
+            st.session_state["shap_models_cached"] = []
+            st.session_state["shap_models_src"] = f"error:http:{e}"
+            models = []
+            models_src = st.session_state["shap_models_src"]
+            st.warning("モデル一覧: 混雑中（HTTPエラー）。少し待ってからもう一度。")
+
+        except Exception as e:
+            st.session_state["shap_models_cached"] = []
+            st.session_state["shap_models_src"] = f"error:{type(e).__name__}:{e}"
+            models = []
+            models_src = st.session_state["shap_models_src"]
+            st.warning(f"モデル一覧の取得に失敗: {type(e).__name__}")
 
 with colM2:
-    st.caption(f"models source: {st.session_state.get('shap_models_src')}")
+    st.caption(f"models source: {models_src}")
 
-models = st.session_state.get("shap_models_cached", [])
-
+# ★モデル選択（一覧が無ければ手入力）
 lc, rc = st.columns([2, 1])
+
 with lc:
     if models:
-        idx0 = 0
-        if st.session_state.get("shap_model_pick") in models:
-            idx0 = models.index(st.session_state["shap_model_pick"])
-        pick = st.selectbox("モデル選択", options=models, index=idx0, key="shap_model_pick")
+        # 既存の選択がリストに無ければ先頭へ
+        current_pick = (st.session_state.get("shap_model_pick") or "").strip()
+        if current_pick not in models:
+            current_pick = models[0]
+            st.session_state["shap_model_pick"] = current_pick
+
+        pick = st.selectbox(
+            "モデル選択",
+            options=models,
+            index=models.index(current_pick),
+            key="shap_model_pick",
+        )
     else:
         st.info("モデル一覧は未取得です。必要なら上の『モデル一覧を取得』を押すか、手入力してください。")
-        pick = st.text_input("モデル名（手入力）", key="shap_model_pick", placeholder="例）best, prod, v1.2 など")
+        pick = st.text_input(
+            "モデル名（手入力）",
+            key="shap_model_pick",
+            placeholder="例）best, prod, v1.2 など",
+        ).strip()
 
 with rc:
-    topk = st.number_input("Top-K", 1, 200, value=int(st.session_state.get("shap_topk", 30)), key="shap_topk")
+    topk = st.number_input(
+        "Top-K",
+        min_value=1,
+        max_value=200,
+        value=int(st.session_state.get("shap_topk", 30) or 30),
+        step=1,
+        key="shap_topk",
+    )
 
+# ※この時点で必ず `pick` と `topk` が存在します（後続の「SHAPを取得」ボタン処理で使えます）
